@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   BookOpen,
   FolderOpen,
@@ -28,10 +28,13 @@ import {
   Minimize2,
   Command,
   AlertTriangle,
-  Copy,
   ArrowRight,
-  Trash2,
-  Pencil,
+  ArrowLeft,
+  SearchCode,
+  RotateCcw,
+  Pin,
+  Columns2,
+  History,
   Folder,
   PanelBottomClose,
   PanelBottomOpen,
@@ -41,9 +44,21 @@ import {
 import { MarkdownEditor } from "./editors/MarkdownEditor";
 import { CodeEditor } from "./editors/CodeEditor";
 import { supportsFormatting } from "./lib/formatting";
+import { Tooltip } from "./components/Tooltip";
+import { useContextMenu } from "./components/ContextMenu";
+import { revealLabel } from "./lib/edit-menu";
+import { markdownSections, sectionSlug } from "./lib/sections";
+import { editorHandle } from "./lib/editor-position";
+import { NavigationHistory, type NavigationEntry } from "./lib/navigation";
+import { WorkspaceSearch, emptySearch } from "./components/WorkspaceSearch";
+import { DocumentOutline } from "./components/DocumentOutline";
+import { selectionRoots } from "../electron/selection.mjs";
+import { HistoryDialog } from "./components/HistoryDialog";
+import { ConflictDiff } from "./components/ConflictDiff";
+import { quickFiles, parseFileQuery, lineOffset } from "./lib/quick-open";
+import { ImagePreview } from "./components/ImagePreview";
 import { TerminalView } from "./components/TerminalPanel";
 import {
-  assetURL,
   basename,
   dirname,
   isImage,
@@ -57,6 +72,9 @@ import type {
   Settings,
   Tab,
   TerminalInfo,
+  EditorPosition,
+  ClosedTab,
+  SearchMatch,
 } from "./types";
 
 type Choice = {
@@ -82,6 +100,12 @@ const initialSettings: Settings = {
   attachmentFolder: "assets",
   ignored: [],
   fontSize: 14,
+  readingFontSize: 17,
+  readingLineHeight: 1.85,
+  readingWidth: 820,
+  historyEnabled: true,
+  historyLimitMB: 100,
+  historyVersions: 20,
   indentSize: 2,
   formatOnOpen: true,
   sidebarWidth: 260,
@@ -118,6 +142,35 @@ function FileIcon({
 }
 
 export default function App() {
+  const { openMenu, closeMenu } = useContextMenu();
+  const [split, setSplitState] = useState<{
+    left: string;
+    right: string;
+  } | null>(null);
+  const splitRef = useRef(split);
+  splitRef.current = split;
+  const setSplit = (next: { left: string; right: string } | null) => {
+    splitRef.current = next;
+    setSplitState(next);
+  };
+  const [historyPath, setHistoryPath] = useState("");
+  const [selection, setSelection] = useState<string[]>([]);
+  const selectionRef = useRef(selection);
+  selectionRef.current = selection;
+  const selectionAnchor = useRef("");
+  const positions = useRef(new Map<string, EditorPosition>());
+  const recentFiles = useRef<string[]>([]);
+  const paletteBeside = useRef(false);
+  const draggedTab = useRef<string | null>(null);
+  const explorerTyping = useRef({ value: "", time: 0 });
+  const closedTabs = useRef<ClosedTab[]>([]);
+  const navigation = useRef(new NavigationHistory());
+  const editorInteraction = useRef(0);
+  const navigationToken = useRef(0),
+    transitioning = useRef(false);
+  const [, redrawNavigation] = useState(0);
+  const [sidebarMode, setSidebarMode] = useState<"files" | "search">("files");
+  const [searchOptions, setSearchOptions] = useState(emptySearch);
   const [settings, setSettings] = useState(initialSettings),
     settingsRef = useRef(settings);
   settingsRef.current = settings;
@@ -137,6 +190,14 @@ export default function App() {
   expandedRef.current = expanded;
   const [selected, setSelected] = useState(""),
     [treeFilter, setTreeFilter] = useState("");
+  useEffect(() => {
+    const existing = new Set(entries.map((entry) => entry.path));
+    const next = selectionRef.current.filter((name) => existing.has(name));
+    if (next.length !== selectionRef.current.length) {
+      selectionRef.current = next;
+      setSelection(next);
+    }
+  }, [entries]);
   const [palette, setPalette] = useState<"files" | "commands" | null>(null),
     [query, setQuery] = useState(""),
     [paletteIndex, setPaletteIndex] = useState(0);
@@ -144,11 +205,6 @@ export default function App() {
     [showOutline, setShowOutline] = useState(false);
   const [dialog, setDialog] = useState<DialogSpec | null>(null),
     [dialogInput, setDialogInput] = useState("");
-  const [context, setContext] = useState<{
-    path: string;
-    x: number;
-    y: number;
-  } | null>(null);
   const [message, setMessage] = useState<{
       text: string;
       error: boolean;
@@ -185,12 +241,140 @@ export default function App() {
     setDialog(null);
     current?.resolve(value);
   };
-  const changeTabs = (fn: (previous: Tab[]) => Tab[]) =>
-    setTabs((previous) => {
-      const next = fn(previous);
-      tabsRef.current = next;
-      return next;
+  const changeTabs = (fn: (previous: Tab[]) => Tab[]) => {
+    const next = fn(tabsRef.current);
+    tabsRef.current = next;
+    setTabs(next);
+  };
+  function capturePosition(
+    name = activeRef.current,
+  ): EditorPosition | undefined {
+    const tab = tabsRef.current.find((tab) => tab.path === name);
+    if (
+      tab &&
+      (name === activeRef.current ||
+        splitRef.current?.left === name ||
+        splitRef.current?.right === name) &&
+      !isImage(name)
+    ) {
+      const saved = editorHandle(name, tab.mode)?.capture();
+      if (saved) positions.current.set(name, saved);
+    }
+    return positions.current.get(name) || tab?.position;
+  }
+  function currentLocation(): NavigationEntry | undefined {
+    return activeRef.current
+      ? { path: activeRef.current, position: capturePosition() }
+      : undefined;
+  }
+  useEffect(() => {
+    document
+      .querySelector(".editor-tab.active")
+      ?.scrollIntoView({ block: "nearest", inline: "nearest" });
+  }, [active, tabs.map((tab) => tab.path).join("\0")]);
+  useEffect(() => {
+    if (!palette) paletteBeside.current = false;
+  }, [palette]);
+  useEffect(() => {
+    document
+      .querySelector('[data-palette-active="true"]')
+      ?.scrollIntoView({ block: "nearest" });
+  }, [paletteIndex, palette, query]);
+  function pinTab(path: string) {
+    changeTabs((previous) => {
+      const updated = previous.map((tab) =>
+        tab.path === path ? { ...tab, pinned: !tab.pinned } : tab,
+      );
+      return [
+        ...updated.filter((tab) => tab.pinned),
+        ...updated.filter((tab) => !tab.pinned),
+      ];
     });
+  }
+  function reorderTab(path: string, target?: string) {
+    if (!target || path === target) return;
+    changeTabs((previous) => {
+      const tab = previous.find((tab) => tab.path === path),
+        other = previous.find((tab) => tab.path === target);
+      if (!tab || !other || !!tab.pinned !== !!other.pinned) return previous;
+      const index = previous.indexOf(other),
+        remaining = previous.filter((entry) => entry !== tab);
+      remaining.splice(index, 0, tab);
+      return remaining;
+    });
+  }
+  async function saveAs(path: string, copy: boolean) {
+    const tab = tabsRef.current.find((tab) => tab.path === path);
+    if (!tab || isImage(path)) return;
+    const savedPosition = capturePosition(path);
+    const dot = path.lastIndexOf("."),
+      suggested =
+        dot > path.lastIndexOf("/")
+          ? path.slice(0, dot) + " copy" + path.slice(dot)
+          : path + " copy";
+    const name = await ask({
+      title: copy ? "Save a copy" : "Save as",
+      description: copy
+        ? "Save the current editor contents to a new file. Your original tab and edits stay open."
+        : "Save the current editor contents under a new path. The original file on disk stays in place. Relative Markdown links keep their targets.",
+      input: suggested,
+      label: "Workspace-relative path",
+      choices: [
+        { id: "submit", label: copy ? "Save copy" : "Save as", primary: true },
+        { id: "cancel", label: "Cancel" },
+      ],
+    });
+    if (!name || name === "cancel") return;
+    if (tabsRef.current.some((entry) => entry.path === name)) {
+      notify("This destination is already open. Choose a new path.", true);
+      return;
+    }
+    try {
+      const doc = await window.margin.saveCopy(path, name, tab.text);
+      const latest = tabsRef.current.find((entry) => entry.path === path);
+      const replace = !copy && latest?.text === tab.text;
+      const created: Tab = {
+        ...doc,
+        baseline: doc.text,
+        dirty: false,
+        mode:
+          isMarkdown(doc.path) && !visualProtection(doc.text)
+            ? tab.mode
+            : "source",
+        version: 0,
+        suppressAutoFormat: true,
+        pinned: replace ? tab.pinned : false,
+        position: savedPosition,
+      };
+      if (savedPosition) positions.current.set(doc.path, savedPosition);
+      if (replace && splitRef.current) {
+        const pair = splitRef.current;
+        setSplit({
+          left: pair.left === path ? doc.path : pair.left,
+          right: pair.right === path ? doc.path : pair.right,
+        });
+      }
+      changeTabs((previous) =>
+        replace
+          ? previous.map((entry) => (entry.path === path ? created : entry))
+          : [...previous, created],
+      );
+      await refreshTree();
+      if (!copy)
+        await openFile(doc.path, undefined, {
+          position: savedPosition,
+          preserveText: true,
+        });
+      await persist();
+      notify(
+        copy
+          ? "Saved a copy of your editor contents."
+          : "Saved under the new path.",
+      );
+    } catch (error) {
+      fail(error);
+    }
+  }
   const updateSettings = async (patch: Partial<Settings>) => {
     try {
       const next = await window.margin.settings(patch);
@@ -201,18 +385,42 @@ export default function App() {
     }
   };
   const persist = async () => {
-    if (rootRef.current)
+    if (rootRef.current && !transitioning.current) {
+      capturePosition();
+      if (splitRef.current) {
+        capturePosition(splitRef.current.left);
+        capturePosition(splitRef.current.right);
+      }
       await window.margin.persist({
-        tabs: tabsRef.current,
+        tabs: tabsRef.current.map((tab) => ({
+          ...tab,
+          position: positions.current.get(tab.path) || tab.position,
+        })),
         active: activeRef.current,
         expanded: expandedRef.current,
+        closedTabs: closedTabs.current,
+        recentFiles: recentFiles.current,
+        split: splitRef.current,
       });
+    }
   };
   const refreshTree = async () => {
     if (rootRef.current) setEntries(await window.margin.tree());
   };
 
   async function restore(opened: OpenedWorkspace) {
+    navigationToken.current++;
+    setSplit(null);
+    setHistoryPath("");
+    setSelection([]);
+    positions.current = new Map(
+      (opened.session?.tabs || []).flatMap((tab) =>
+        tab.position ? [[tab.path, tab.position] as const] : [],
+      ),
+    );
+    closedTabs.current = opened.session?.closedTabs || [];
+    recentFiles.current = opened.session?.recentFiles || [];
+    setSidebarMode("files");
     rootRef.current = opened.root;
     setRoot(opened.root);
     setEntries(opened.entries);
@@ -241,6 +449,9 @@ export default function App() {
               ? "visual"
               : "source",
           version: 0,
+          position: saved.position,
+          suppressAutoFormat: saved.suppressAutoFormat,
+          pinned: saved.pinned,
           ...(dirty && disk.revision !== saved.revision
             ? { conflict: disk }
             : {}),
@@ -250,13 +461,31 @@ export default function App() {
           restored.push({ ...saved, conflict: "deleted", version: 0 });
       }
     }
-    changeTabs(() => restored);
+    changeTabs(() => [
+      ...restored.filter((tab) => tab.pinned),
+      ...restored.filter((tab) => !tab.pinned),
+    ]);
     const nextActive =
       restored.find((t) => t.path === opened.session?.active)?.path ||
       restored[0]?.path ||
       "";
     setActive(nextActive);
     activeRef.current = nextActive;
+    const savedSplit = opened.session?.split;
+    if (
+      savedSplit &&
+      savedSplit.left !== savedSplit.right &&
+      (nextActive === savedSplit.left || nextActive === savedSplit.right) &&
+      restored.some((tab) => tab.path === savedSplit.left) &&
+      restored.some((tab) => tab.path === savedSplit.right)
+    )
+      setSplit(savedSplit);
+    navigation.current.reset(
+      nextActive
+        ? { path: nextActive, position: positions.current.get(nextActive) }
+        : undefined,
+    );
+    redrawNavigation((value) => value + 1);
     setExpanded(
       opened.session?.expanded ||
         opened.entries
@@ -297,7 +526,29 @@ export default function App() {
     if (!root || loading) return;
     const timer = setTimeout(() => void persist().catch(fail), 350);
     return () => clearTimeout(timer);
-  }, [tabs, active, expanded, root, loading]);
+  }, [tabs, active, expanded, root, loading, split]);
+  useEffect(() => {
+    let timer: ReturnType<typeof setTimeout>;
+    const changed = (event: Event) => {
+      const name = (event as CustomEvent<{ path: string }>).detail.path;
+      if (
+        name !== activeRef.current &&
+        name !== splitRef.current?.left &&
+        name !== splitRef.current?.right
+      )
+        return;
+      capturePosition(name);
+      clearTimeout(timer);
+      timer = setTimeout(() => {
+        void persist().catch(fail);
+      }, 400);
+    };
+    window.addEventListener("margin:position-changed", changed);
+    return () => {
+      clearTimeout(timer);
+      window.removeEventListener("margin:position-changed", changed);
+    };
+  }, []);
 
   async function saveTab(name: string, silent = false) {
     const tab = tabsRef.current.find((t) => t.path === name);
@@ -437,74 +688,265 @@ export default function App() {
       }),
     [],
   );
-  async function openFile(name: string, anchor?: string) {
-    if (busyRef.current) return;
-    const existing = tabsRef.current.find((t) => t.path === name);
-    if (existing) {
+  async function openFile(
+    name: string,
+    anchor?: string,
+    target?: {
+      position?: EditorPosition;
+      range?: { from: number; to: number; value?: string };
+      mode?: Tab["mode"];
+      preserveText?: boolean;
+      line?: number;
+      column?: number;
+    },
+    record = true,
+  ): Promise<boolean> {
+    if (busyRef.current || transitioning.current) return false;
+    const before = currentLocation();
+    const interactionBefore = editorInteraction.current;
+    const token = ++navigationToken.current;
+    try {
+      let tab = tabsRef.current.find((tab) => tab.path === name);
+      if (!tab) {
+        if (isImage(name))
+          tab = {
+            path: name,
+            text: "",
+            baseline: "",
+            revision: "",
+            dirty: false,
+            mode: "source",
+            version: 0,
+          };
+        else {
+          const doc = await window.margin.read(name);
+          if (token !== navigationToken.current) return false;
+          const protection = visualProtection(doc.text);
+          tab = {
+            ...doc,
+            baseline: doc.text,
+            dirty: false,
+            mode: isMarkdown(name) && !protection ? "visual" : "source",
+            version: 0,
+            suppressAutoFormat: target?.preserveText,
+          };
+          if (isMarkdown(name) && protection)
+            notify(`Opened in Source to preserve ${protection}.`);
+        }
+        changeTabs((previous) =>
+          previous.some((entry) => entry.path === name)
+            ? previous
+            : [...previous, tab!],
+        );
+      }
+      const mode =
+        target?.mode &&
+        isMarkdown(name) &&
+        !(target.mode === "visual" && visualProtection(tab.text))
+          ? target.mode
+          : tab.mode;
+      if (target?.position) positions.current.set(name, target.position);
+      const mounted =
+        activeRef.current === name &&
+        tab.mode === mode &&
+        editorHandle(name, mode);
+      if (tab.mode !== mode || target?.position || target?.preserveText)
+        changeTabs((previous) =>
+          previous.map((entry) =>
+            entry.path === name
+              ? {
+                  ...entry,
+                  mode,
+                  position: positions.current.get(name),
+                  suppressAutoFormat:
+                    entry.suppressAutoFormat || target?.preserveText,
+                }
+              : entry,
+          ),
+        );
+      const pair = splitRef.current;
+      if (pair && pair.left !== name && pair.right !== name)
+        setSplit(
+          activeRef.current === pair.right
+            ? { ...pair, right: name }
+            : { ...pair, left: name },
+        );
       setActive(name);
       activeRef.current = name;
-    } else
-      try {
-        if (isImage(name)) {
-          changeTabs((previous) => [
-            ...previous,
-            {
-              path: name,
-              text: "",
-              baseline: "",
-              revision: "",
-              dirty: false,
-              mode: "source",
-              version: 0,
-            },
-          ]);
-        } else {
-          const doc = await window.margin.read(name);
-          const protect = visualProtection(doc.text);
-          changeTabs((previous) =>
-            previous.some((t) => t.path === name)
-              ? previous
-              : [
-                  ...previous,
-                  {
-                    ...doc,
-                    baseline: doc.text,
-                    dirty: false,
-                    mode: isMarkdown(name) && !protect ? "visual" : "source",
-                    version: 0,
-                  },
-                ],
-          );
-          if (isMarkdown(name) && protect)
-            notify(`Opened in Source to preserve ${protect}.`);
-        }
-        setActive(name);
-        activeRef.current = name;
-        const parents = name
-          .split("/")
-          .slice(0, -1)
-          .map((_, i, all) => all.slice(0, i + 1).join("/"));
-        setExpanded((previous) => [...new Set([...previous, ...parents])]);
-      } catch (e) {
-        fail(e);
+      const parents = name
+        .split("/")
+        .slice(0, -1)
+        .map((_, index, parts) => parts.slice(0, index + 1).join("/"));
+      setExpanded((previous) => [...new Set([...previous, ...parents])]);
+      // Mount/activate the editor and let its initial view restoration settle.
+      if (!mounted)
+        await new Promise<void>((resolve) =>
+          requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+        );
+      if (token !== navigationToken.current || activeRef.current !== name)
+        return false;
+      const handle = editorHandle(name, mode);
+      tab = tabsRef.current.find((entry) => entry.path === name) || tab;
+      let range = target?.range;
+      if (target?.line) {
+        const offset = lineOffset(tab.text, target.line, target.column);
+        range = { from: offset, to: offset };
       }
-    if (anchor)
-      setTimeout(() => {
-        const headings = appRef.current
-          ?.querySelector(".editor-pane.active")
-          ?.querySelectorAll<HTMLElement>("h1,h2,h3,h4,h5,h6");
-        const normalized = (s: string) =>
-          s
-            .toLowerCase()
-            .trim()
-            .replace(/[^\p{L}\p{N}\s_-]/gu, "")
-            .replace(/\s/g, "-");
-        Array.from(headings || [])
-          .find((h) => normalized(h.textContent || "") === normalized(anchor))
-          ?.scrollIntoView({ block: "start", behavior: "smooth" });
-      }, 180);
+      if (
+        range?.value &&
+        tab.text.slice(range.from, range.to) !== range.value
+      ) {
+        const ahead = tab.text.indexOf(range.value, range.from),
+          behind = tab.text.lastIndexOf(range.value, range.from);
+        const nearest =
+          ahead < 0
+            ? behind
+            : behind < 0
+              ? ahead
+              : ahead - range.from < range.from - behind
+                ? ahead
+                : behind;
+        if (nearest >= 0)
+          range = { ...range, from: nearest, to: nearest + range.value.length };
+        else {
+          notify("This search result has changed. Search again.", true);
+          range = undefined;
+        }
+      }
+      if (anchor && isMarkdown(name)) {
+        const sections = markdownSections(tab.text);
+        const section =
+          sections.find((item) => item.anchor === anchor.normalize("NFC")) ||
+          sections.find((item) => item.anchor === sectionSlug(anchor));
+        if (section) range = { from: section.from, to: section.from };
+      }
+      // A click or typing during activation takes precedence over a delayed restore.
+      if (editorInteraction.current === interactionBefore) {
+        if (range) handle?.reveal(range.from, range.to);
+        else {
+          const saved =
+            target?.position || positions.current.get(name) || tab.position;
+          if (saved) handle?.restore(saved);
+          else handle?.focus?.();
+        }
+      }
+      await new Promise<void>((resolve) =>
+        requestAnimationFrame(() => resolve()),
+      );
+      if (token !== navigationToken.current) return false;
+      if (record)
+        navigation.current.record(before, {
+          path: name,
+          position: capturePosition(name),
+        });
+      recentFiles.current = [
+        name,
+        ...recentFiles.current.filter((path) => path !== name),
+      ].slice(0, 100);
+      redrawNavigation((value) => value + 1);
+      return true;
+    } catch (error) {
+      if (token === navigationToken.current) fail(error);
+      return false;
+    }
+  }
+  function focusPane(name: string) {
+    if (activeRef.current === name) return;
+    capturePosition();
+    editorInteraction.current++;
+    setActive(name);
+    activeRef.current = name;
+  }
+  async function openBeside(name?: string) {
+    const left = activeRef.current;
+    if (!left) return;
+    const right =
+      name && name !== left
+        ? name
+        : tabsRef.current.find((tab) => tab.path !== left)?.path;
+    if (!right) {
+      paletteBeside.current = true;
+      setPalette("files");
+      setQuery("");
+      return;
+    }
+    if (!(await openFile(right))) return;
+    setSplit({ left, right });
+  }
+  async function showHistory(name: string) {
+    if (isImage(name)) return;
+    if (await openFile(name)) setHistoryPath(name);
+  }
+  async function goHistory(direction: -1 | 1) {
+    const previousIndex = navigation.current.index;
+    const target = navigation.current.move(direction, currentLocation());
+    if (!target) return;
+    const operation = openFile(
+      target.path,
+      undefined,
+      { position: target.position, mode: target.position?.mode },
+      false,
+    );
+    const token = navigationToken.current;
+    if (!(await operation) && token === navigationToken.current)
+      navigation.current.index = previousIndex;
+    redrawNavigation((value) => value + 1);
+  }
+  async function reopenClosed(path?: string) {
+    const index = path
+      ? closedTabs.current.map((tab) => tab.path).lastIndexOf(path)
+      : closedTabs.current.length - 1;
+    if (index < 0) return;
+    const saved = closedTabs.current[index];
+    if (
+      !(await openFile(saved.path, undefined, {
+        position: saved.position,
+        mode: saved.mode,
+      }))
+    )
+      return;
+    closedTabs.current.splice(index, 1);
+    changeTabs((previous) => {
+      const tab = previous.find((tab) => tab.path === saved.path)!;
+      const remaining = previous.filter((entry) => entry !== tab);
+      const pinnedCount = remaining.filter((tab) => tab.pinned).length;
+      const reopened = { ...tab, pinned: saved.pinned };
+      remaining.splice(
+        saved.pinned
+          ? Math.min(saved.index, pinnedCount)
+          : Math.max(pinnedCount, Math.min(saved.index, remaining.length)),
+        0,
+        reopened,
+      );
+      return remaining;
+    });
+    redrawNavigation((value) => value + 1);
+    await persist();
+  }
+  function findInDocument(replace = false) {
+    if (activeRef.current && !isImage(activeRef.current))
+      window.dispatchEvent(
+        new CustomEvent("margin:find", {
+          detail: { path: activeRef.current, replace },
+        }),
+      );
+  }
+  function showWorkspaceSearch() {
+    setSidebarMode("search");
+    void updateSettings({ sidebarVisible: true, focusMode: false });
+    requestAnimationFrame(() =>
+      window.dispatchEvent(new Event("margin:focus-workspace-search")),
+    );
+  }
+  function openSearchResult(match: SearchMatch) {
+    void openFile(match.path, undefined, {
+      mode: "source",
+      preserveText: true,
+      range: { from: match.from, to: match.to, value: match.value },
+    });
   }
   async function closeTab(name: string) {
+    const savedPosition = capturePosition(name);
     const tab = tabsRef.current.find((t) => t.path === name);
     if (tab?.dirty) {
       const result = await ask({
@@ -522,21 +964,432 @@ export default function App() {
         result === "cancel" ||
         (result === "save" && !(await saveTab(name)))
       )
-        return;
+        return false;
     }
+    const pair = splitRef.current;
+    const other =
+      pair?.left === name
+        ? pair.right
+        : pair?.right === name
+          ? pair.left
+          : undefined;
+    if (other) setSplit(null);
     const index = tabsRef.current.findIndex((t) => t.path === name);
+    if (tab) {
+      closedTabs.current = [
+        ...closedTabs.current.filter((entry) => entry.path !== name),
+        {
+          path: name,
+          mode: tab.mode,
+          position: savedPosition,
+          index,
+          pinned: tab.pinned,
+        },
+      ].slice(-20);
+      redrawNavigation((value) => value + 1);
+    }
     const remaining = tabsRef.current.filter((t) => t.path !== name);
+    tabsRef.current = remaining;
     changeTabs(() => remaining);
     if (activeRef.current === name) {
-      const next = remaining[Math.max(0, index - 1)]?.path || "";
-      setActive(next);
-      activeRef.current = next;
+      const next = other || remaining[Math.max(0, index - 1)]?.path || "";
+      if (next) await openFile(next);
+      else {
+        setActive("");
+        activeRef.current = "";
+      }
     }
     await persist();
+    return true;
+  }
+  async function closeTabs(names: string[]) {
+    for (const name of names) {
+      if (
+        tabsRef.current.some((tab) => tab.path === name && !tab.pinned) &&
+        !(await closeTab(name))
+      )
+        break;
+    }
+  }
+  function chooseSelection(
+    path: string,
+    kind: "single" | "toggle" | "range" = "single",
+  ) {
+    setSelected(path);
+    if (kind === "single") {
+      selectionAnchor.current = path;
+      selectionRef.current = [path];
+      setSelection([path]);
+      return;
+    }
+    if (kind === "toggle") {
+      const next = selectionRef.current.includes(path)
+        ? selectionRef.current.filter((name) => name !== path)
+        : [...selectionRef.current, path];
+      if (next.length > 100) {
+        notify("Select at most 100 items at once.", true);
+        return;
+      }
+      selectionAnchor.current = path;
+      selectionRef.current = next;
+      setSelection(next);
+      return;
+    }
+    const first = displayedEntries.findIndex(
+        (entry) => entry.path === (selectionAnchor.current || selected),
+      ),
+      last = displayedEntries.findIndex((entry) => entry.path === path);
+    const next = displayedEntries
+      .slice(Math.max(0, Math.min(first, last)), Math.max(first, last) + 1)
+      .map((entry) => entry.path);
+    if (next.length > 100) {
+      notify("Select at most 100 items at once.", true);
+      return;
+    }
+    selectionRef.current = next;
+    setSelection(next);
+  }
+  function remapWorkspacePaths(moves: { from: string; to: string }[]) {
+    const map = (path: string) => {
+      const move = moves.find((move) => isInside(path, move.from));
+      return move ? move.to + path.slice(move.from.length) : path;
+    };
+    positions.current = new Map(
+      [...positions.current].map(([path, position]) => [map(path), position]),
+    );
+    recentFiles.current = recentFiles.current.map(map);
+    closedTabs.current = closedTabs.current.map((tab) => ({
+      ...tab,
+      path: map(tab.path),
+    }));
+    navigation.current.mapPaths(map);
+    changeTabs((previous) =>
+      previous.map((tab) => ({
+        ...tab,
+        path: map(tab.path),
+        version: tab.version + 1,
+      })),
+    );
+    if (splitRef.current)
+      setSplit({
+        left: map(splitRef.current.left),
+        right: map(splitRef.current.right),
+      });
+    const next = map(activeRef.current);
+    setActive(next);
+    activeRef.current = next;
+    setExpanded((previous) => previous.map(map));
+  }
+  async function moveSelected(
+    paths = selectionRef.current,
+    directory?: string,
+  ) {
+    closeMenu();
+    const roots = selectionRoots(paths);
+    const destination =
+      directory ??
+      (await ask({
+        title: `Move ${roots.length} selected items`,
+        description:
+          "Choose an existing workspace-relative folder. All destinations are checked before moving; Markdown references are updated together.",
+        input: "",
+        label: "Destination folder (empty = workspace root)",
+        choices: [
+          { id: "submit", label: "Move & update links", primary: true },
+          { id: "cancel", label: "Cancel" },
+        ],
+      }));
+    if (
+      destination === null ||
+      destination === "cancel" ||
+      !(await settleEdits("Moving selected items"))
+    )
+      return;
+    await withOperation(async () => {
+      const result = await window.margin.moveSelection(roots, destination);
+      remapWorkspacePaths(result.moves);
+      setSelection(result.moves.map((move) => move.to));
+      selectionRef.current = result.moves.map((move) => move.to);
+      setSelected(result.moves[0]?.to || "");
+      notify(
+        `Moved ${result.moves.length} items. Updated references in ${result.referencesUpdated} documents.${result.historyWarning ? " Local history could not follow the move: " + result.historyWarning : ""}`,
+        !!result.historyWarning,
+      );
+    });
+  }
+  async function trashSelected(paths = selectionRef.current) {
+    closeMenu();
+    const roots = selectionRoots(paths);
+    if (!(await settleEdits("Deleting selected items"))) return;
+    try {
+      const incoming = await window.margin.incomingSelection(roots);
+      const result = await ask({
+        title: `Move ${roots.length} selected items to Trash?`,
+        description: `${roots.join(", ")}. ${incoming.length ? `${incoming.length} outside documents reference these items: ${incoming.slice(0, 8).join(", ")}. Those links will point to missing files.` : "No incoming references from outside the selection were found."} You can restore items from the system Trash.`,
+        choices: [
+          { id: "trash", label: "Move selection to Trash", danger: true },
+          { id: "cancel", label: "Cancel" },
+        ],
+      });
+      if (result !== "trash") return;
+      await withOperation(async () => {
+        const result = await window.margin.trashSelection(roots),
+          removed = (path: string) =>
+            result.trashed.some((root) => isInside(path, root));
+        if (
+          splitRef.current &&
+          (removed(splitRef.current.left) || removed(splitRef.current.right))
+        )
+          setSplit(null);
+        positions.current = new Map(
+          [...positions.current].filter(([path]) => !removed(path)),
+        );
+        recentFiles.current = recentFiles.current.filter(
+          (path) => !removed(path),
+        );
+        closedTabs.current = closedTabs.current.filter(
+          (tab) => !removed(tab.path),
+        );
+        navigation.current.removePaths(removed);
+        const remaining = tabsRef.current.filter((tab) => !removed(tab.path));
+        changeTabs(() => remaining);
+        if (removed(activeRef.current)) {
+          const next = remaining[0]?.path || "";
+          setActive(next);
+          activeRef.current = next;
+        }
+        setSelection(result.failed.map((item) => item.path));
+        selectionRef.current = result.failed.map((item) => item.path);
+        setSelected(result.failed[0]?.path || "");
+        notify(
+          result.failed.length
+            ? `Moved ${result.trashed.length} items to Trash; ${result.failed.map((item) => item.path + ": " + item.message).join("; ")}`
+            : `Moved ${result.trashed.length} items to Trash.`,
+          !!result.failed.length,
+        );
+      });
+    } catch (error) {
+      fail(error);
+    }
+  }
+  function droppedSelection(event: React.DragEvent, directory: string) {
+    const raw = event.dataTransfer.getData("application/x-margin-paths");
+    if (raw) {
+      try {
+        const paths = JSON.parse(raw);
+        if (Array.isArray(paths) && paths.length > 1) {
+          void moveSelected(paths, directory);
+          return;
+        }
+      } catch {}
+    }
+    const from = event.dataTransfer.getData("application/x-margin-path");
+    if (from)
+      void moveEntry(
+        from,
+        directory ? directory + "/" + basename(from) : basename(from),
+      );
+  }
+  function explorerMenu(
+    path: string,
+    x: number,
+    y: number,
+    target: HTMLElement,
+  ) {
+    const parent = entries.find((entry) => entry.path === path)?.directory
+      ? path
+      : dirname(path);
+    const selectedPaths = selectionRef.current.includes(path)
+      ? selectionRef.current
+      : [path];
+    openMenu({
+      x,
+      y,
+      restoreFocus: () => target.isConnected && target.focus(),
+      items: [
+        ...(path &&
+        !entries.find((entry) => entry.path === path)?.directory &&
+        activeRef.current &&
+        path !== activeRef.current
+          ? [{ label: "Open beside current", run: () => openBeside(path) }]
+          : []),
+        ...(selectedPaths.length > 1
+          ? [
+              {
+                label: `Move ${selectedPaths.length} selected items…`,
+                run: () => moveSelected(selectedPaths),
+              },
+              {
+                label: `Move ${selectedPaths.length} selected items to Trash…`,
+                danger: true,
+                run: () => trashSelected(selectedPaths),
+              },
+              null,
+            ]
+          : []),
+        ...(path && selectedPaths.length === 1
+          ? [
+              {
+                label: "Rename / move",
+                shortcut: "F2",
+                run: () => moveEntry(path),
+              },
+              { label: "Duplicate", run: () => duplicateEntry(path) },
+            ]
+          : []),
+        {
+          label: "New document here",
+          run: () => {
+            return createEntry(false, parent);
+          },
+        },
+        { label: "New folder here", run: () => createEntry(true, parent) },
+        null,
+        { label: "Open terminal here", run: () => addTerminal(parent) },
+        { label: "Copy file path", run: () => window.margin.copyPath(path) },
+        { label: revealLabel, run: () => window.margin.reveal(path) },
+        ...(path
+          ? [
+              null,
+              {
+                label: "Move to Trash",
+                shortcut: "Del",
+                danger: true,
+                run: () => deleteEntry(path),
+              },
+            ]
+          : []),
+      ],
+    });
+  }
+  function tabMenu(path: string, x: number, y: number, target: HTMLElement) {
+    const opened = tabsRef.current;
+    const tab = opened.find((entry) => entry.path === path);
+    const index = opened.findIndex((entry) => entry.path === path);
+    openMenu({
+      x,
+      y,
+      restoreFocus: () => target.isConnected && target.focus(),
+      items: [
+        { label: "Open beside current", run: () => openBeside(path) },
+        {
+          label: "Local version history",
+          disabled: isImage(path),
+          run: () => showHistory(path),
+        },
+        {
+          label: "Save",
+          shortcut: `${keyboard}+S`,
+          disabled: !tab?.dirty || isImage(path),
+          run: () => saveTab(path),
+        },
+        {
+          label: "Save as…",
+          disabled: isImage(path),
+          run: () => saveAs(path, false),
+        },
+        {
+          label: "Save a copy…",
+          disabled: isImage(path),
+          run: () => saveAs(path, true),
+        },
+        {
+          label: tab?.pinned ? "Unpin tab" : "Pin tab",
+          run: () => pinTab(path),
+        },
+        {
+          label: "Move tab left",
+          disabled: index <= 0 || !!opened[index - 1]?.pinned !== !!tab?.pinned,
+          run: () => reorderTab(path, opened[index - 1]?.path),
+        },
+        {
+          label: "Move tab right",
+          disabled:
+            index >= opened.length - 1 ||
+            !!opened[index + 1]?.pinned !== !!tab?.pinned,
+          run: () => reorderTab(path, opened[index + 1]?.path),
+        },
+        {
+          label: "Reopen closed tab",
+          shortcut: `${keyboard}+Shift+T`,
+          disabled: !closedTabs.current.length,
+          run: () => reopenClosed(),
+        },
+        ...(closedTabs.current.length
+          ? [
+              {
+                label: "Recently closed",
+                children: [...closedTabs.current].reverse().map((entry) => ({
+                  label: entry.path,
+                  run: () => reopenClosed(entry.path),
+                })),
+              },
+            ]
+          : []),
+        null,
+        {
+          label: "Close",
+          shortcut: `${keyboard}+W`,
+          run: () => closeTab(path),
+        },
+        {
+          label: "Close other tabs",
+          disabled: !opened.some(
+            (entry) => entry.path !== path && !entry.pinned,
+          ),
+          run: () =>
+            closeTabs(
+              opened
+                .filter((entry) => entry.path !== path)
+                .map((entry) => entry.path),
+            ),
+        },
+        {
+          label: "Close tabs to the right",
+          disabled: !opened.slice(index + 1).some((entry) => !entry.pinned),
+          run: () =>
+            closeTabs(opened.slice(index + 1).map((entry) => entry.path)),
+        },
+        {
+          label: "Close all tabs",
+          disabled: !opened.some((entry) => !entry.pinned),
+          run: () => closeTabs(opened.map((entry) => entry.path)),
+        },
+        null,
+        {
+          label: "Reveal in explorer",
+          run: async () => {
+            setSidebarMode("files");
+            chooseSelection(path);
+            setTreeFilter("");
+            const parts = path.split("/").slice(0, -1);
+            setExpanded((previous) => [
+              ...new Set([
+                ...previous,
+                ...parts.map((_, i) => parts.slice(0, i + 1).join("/")),
+              ]),
+            ]);
+            await updateSettings({ sidebarVisible: true, focusMode: false });
+            requestAnimationFrame(() => {
+              const row = Array.from(
+                document.querySelectorAll<HTMLElement>('[role="treeitem"]'),
+              ).find((element) => element.getAttribute("aria-label") === path);
+              row?.scrollIntoView({ block: "nearest" });
+              row?.focus();
+            });
+          },
+        },
+        {
+          label: "Copy file path",
+          run: () => window.margin.copyPath(path),
+        },
+      ],
+    });
   }
   async function chooseWorkspace(recentRoot?: string) {
     if (!(await settleEdits("Opening another workspace"))) return;
     await persist();
+    transitioning.current = true;
     try {
       const opened = recentRoot
         ? await window.margin.openWorkspace(recentRoot)
@@ -544,6 +1397,8 @@ export default function App() {
       if (opened) await restore(opened);
     } catch (e) {
       fail(e);
+    } finally {
+      transitioning.current = false;
     }
   }
   function edit(name: string, text: string) {
@@ -578,12 +1433,12 @@ export default function App() {
       ? entry.path
       : dirname(selected || activeRef.current);
   }
-  async function createEntry(directory: boolean) {
+  async function createEntry(directory: boolean, destination?: string) {
     if (!root) {
       await chooseWorkspace();
       return;
     }
-    const parent = creationParent();
+    const parent = destination ?? creationParent();
     const name = await ask({
       title: directory ? "New folder" : "New document",
       description: parent
@@ -605,14 +1460,14 @@ export default function App() {
       await refreshTree();
       if (directory) {
         setExpanded((previous) => [...previous, target]);
-        setSelected(target);
+        chooseSelection(target);
       } else await openFile(target);
     } catch (e) {
       fail(e);
     }
   }
   async function moveEntry(from: string, to?: string) {
-    setContext(null);
+    closeMenu();
     const target =
       to ||
       (await ask({
@@ -635,6 +1490,20 @@ export default function App() {
       return;
     await withOperation(async () => {
       const result = await window.margin.move(from, target);
+      positions.current = new Map(
+        [...positions.current].map(([path, position]) => [
+          mapped(path, from, target),
+          position,
+        ]),
+      );
+      recentFiles.current = recentFiles.current.map((path) =>
+        mapped(path, from, target),
+      );
+      closedTabs.current = closedTabs.current.map((tab) => ({
+        ...tab,
+        path: mapped(tab.path, from, target),
+      }));
+      navigation.current.mapPaths((path) => mapped(path, from, target));
       changeTabs((previous) =>
         previous.map((tab) => ({
           ...tab,
@@ -642,18 +1511,24 @@ export default function App() {
           version: tab.version + 1,
         })),
       );
+      if (splitRef.current)
+        setSplit({
+          left: mapped(splitRef.current.left, from, target),
+          right: mapped(splitRef.current.right, from, target),
+        });
       const next = mapped(activeRef.current, from, target);
       setActive(next);
       activeRef.current = next;
       setExpanded((previous) => previous.map((p) => mapped(p, from, target)));
-      setSelected(target);
+      chooseSelection(target);
       notify(
-        `Moved to ${target}. Updated references in ${result.referencesUpdated} document${result.referencesUpdated === 1 ? "" : "s"}.`,
+        `Moved to ${target}. Updated references in ${result.referencesUpdated} document${result.referencesUpdated === 1 ? "" : "s"}.${result.historyWarning ? " Local history could not follow the move: " + result.historyWarning : ""}`,
+        !!result.historyWarning,
       );
     });
   }
   async function duplicateEntry(from: string) {
-    setContext(null);
+    closeMenu();
     const dot = from.lastIndexOf("."),
       suggested =
         dot > from.lastIndexOf("/")
@@ -681,7 +1556,7 @@ export default function App() {
     });
   }
   async function deleteEntry(name: string) {
-    setContext(null);
+    closeMenu();
     if (!(await settleEdits("Deleting files"))) return;
     try {
       const incoming = await window.margin.incoming(name);
@@ -698,6 +1573,23 @@ export default function App() {
       if (result !== "delete") return;
       await withOperation(async () => {
         await window.margin.trash(name);
+        if (
+          splitRef.current &&
+          (isInside(splitRef.current.left, name) ||
+            isInside(splitRef.current.right, name))
+        )
+          setSplit(null);
+        setSelection([]);
+        recentFiles.current = recentFiles.current.filter(
+          (path) => !isInside(path, name),
+        );
+        closedTabs.current = closedTabs.current.filter(
+          (tab) => !isInside(tab.path, name),
+        );
+        navigation.current.removePaths((path) => isInside(path, name));
+        for (const path of positions.current.keys())
+          if (isInside(path, name)) positions.current.delete(path);
+        redrawNavigation((value) => value + 1);
         const remaining = tabsRef.current.filter(
           (tab) => !isInside(tab.path, name),
         );
@@ -725,21 +1617,10 @@ export default function App() {
       description:
         "Your editor content has been preserved. Save it as a separate copy, or explicitly reload the disk version. You can compare both versions below.",
       extra: (
-        <div className="conflict-comparison">
-          <label>
-            Your editor version
-            <textarea readOnly value={tab.text} />
-          </label>
-          <label>
-            Current disk version
-            <textarea
-              readOnly
-              value={
-                disk === "deleted" ? "[File deleted or unavailable]" : disk.text
-              }
-            />
-          </label>
-        </div>
+        <ConflictDiff
+          mine={tab.text}
+          disk={disk === "deleted" ? null : disk.text}
+        />
       ),
       choices: [
         { id: "copy", label: "Save my edits as copy", primary: true },
@@ -814,10 +1695,15 @@ export default function App() {
         return;
       }
     }
+    const savedPosition = capturePosition(tab.path);
     changeTabs((previous) =>
       previous.map((t) =>
         t.path === tab.path
-          ? { ...t, mode: t.mode === "visual" ? "source" : "visual" }
+          ? {
+              ...t,
+              mode: t.mode === "visual" ? "source" : "visual",
+              position: savedPosition,
+            }
           : t,
       ),
     );
@@ -831,10 +1717,10 @@ export default function App() {
       fail(e);
     }
   }
-  async function addTerminal() {
+  async function addTerminal(directory = "") {
     if (!root) return;
     try {
-      const info = await window.margin.terminalCreate(chosenShell);
+      const info = await window.margin.terminalCreate(chosenShell, directory);
       setTerminalTabs((previous) => [...previous, info]);
       setTerminalActive(info.id);
       await updateSettings({ terminalVisible: true });
@@ -894,6 +1780,12 @@ export default function App() {
     createEntry,
     addTerminal,
     closeTab,
+    openFile,
+    reopenClosed,
+    goHistory,
+    findInDocument,
+    showWorkspaceSearch,
+    saveAs,
   });
   actionsRef.current = {
     requestClose,
@@ -903,6 +1795,12 @@ export default function App() {
     createEntry,
     addTerminal,
     closeTab,
+    openFile,
+    reopenClosed,
+    goHistory,
+    findInDocument,
+    showWorkspaceSearch,
+    saveAs,
   };
   useEffect(
     () => window.margin.onClose(() => void actionsRef.current.requestClose()),
@@ -911,9 +1809,17 @@ export default function App() {
   useEffect(
     () =>
       window.margin.onCommand((command) => {
+        if (command === "save-as")
+          void actionsRef.current.saveAs(activeRef.current, false);
+        if (command === "save-copy")
+          void actionsRef.current.saveAs(activeRef.current, true);
         if (command === "save")
           void actionsRef.current.saveTab(activeRef.current);
         if (command === "open") void actionsRef.current.chooseWorkspace();
+        if (command === "reopen-tab") void actionsRef.current.reopenClosed();
+        if (command === "find") actionsRef.current.findInDocument();
+        if (command === "search-workspace")
+          actionsRef.current.showWorkspaceSearch();
       }),
     [],
   );
@@ -922,8 +1828,9 @@ export default function App() {
       if (event.key === "Escape") {
         if (dialog) answer(null);
         else {
-          setContext(null);
+          closeMenu();
           setPalette(null);
+          paletteBeside.current = false;
           setShowSettings(false);
         }
         return;
@@ -957,14 +1864,30 @@ export default function App() {
         return;
       }
       if (modal) return;
+      if (event.altKey && ["ArrowLeft", "ArrowRight"].includes(event.key)) {
+        event.preventDefault();
+        void actionsRef.current.goHistory(event.key === "ArrowLeft" ? -1 : 1);
+        return;
+      }
       if (!(event.ctrlKey || event.metaKey)) return;
       const key = event.key.toLowerCase();
-      if (key === "s") {
+      if (key === "f") {
+        event.preventDefault();
+        if (event.shiftKey) actionsRef.current.showWorkspaceSearch();
+        else actionsRef.current.findInDocument(event.altKey);
+      } else if (key === "h" && !event.metaKey) {
+        event.preventDefault();
+        actionsRef.current.findInDocument(true);
+      } else if (key === "t" && event.shiftKey) {
+        event.preventDefault();
+        void actionsRef.current.reopenClosed();
+      } else if (key === "s") {
         event.preventDefault();
         if (event.shiftKey) void actionsRef.current.saveAll();
         else void actionsRef.current.saveTab(activeRef.current);
       } else if (key === "p") {
         event.preventDefault();
+        paletteBeside.current = false;
         setPalette(event.shiftKey ? "commands" : "files");
         setQuery("");
         setPaletteIndex(0);
@@ -1001,19 +1924,12 @@ export default function App() {
             (index + (event.shiftKey ? -1 : 1) + tabsRef.current.length) %
               tabsRef.current.length
           ].path;
-        setActive(next);
-        activeRef.current = next;
+        void actionsRef.current.openFile(next);
       }
     };
     window.addEventListener("keydown", keydown);
     return () => window.removeEventListener("keydown", keydown);
   }, [dialog, dialogInput, showSettings, palette]);
-  useEffect(() => {
-    if (!context) return;
-    const close = () => setContext(null);
-    window.addEventListener("click", close);
-    return () => window.removeEventListener("click", close);
-  }, [context]);
   function resizePanel(
     event: React.PointerEvent,
     panel: "sidebar" | "terminal",
@@ -1055,6 +1971,51 @@ export default function App() {
   const keyboard = platform === "darwin" ? "⌘" : "Ctrl";
   const commands = [
     {
+      name: "Search workspace contents",
+      shortcut: `${keyboard}+Shift+F`,
+      run: showWorkspaceSearch,
+    },
+    ...(current && !isImage(current.path)
+      ? [
+          { name: "Save as…", run: () => saveAs(current.path, false) },
+          { name: "Save a copy…", run: () => saveAs(current.path, true) },
+          {
+            name: "Find in document",
+            shortcut: `${keyboard}+F`,
+            run: () => findInDocument(),
+          },
+          { name: "Replace in document", run: () => findInDocument(true) },
+        ]
+      : []),
+    ...(closedTabs.current.length
+      ? [
+          {
+            name: "Reopen closed tab",
+            shortcut: `${keyboard}+Shift+T`,
+            run: () => reopenClosed(),
+          },
+        ]
+      : []),
+    ...(navigation.current.index > 0
+      ? [
+          {
+            name: "Navigate back",
+            shortcut: "Alt+Left",
+            run: () => goHistory(-1),
+          },
+        ]
+      : []),
+    ...(navigation.current.index >= 0 &&
+    navigation.current.index < navigation.current.entries.length - 1
+      ? [
+          {
+            name: "Navigate forward",
+            shortcut: "Alt+Right",
+            run: () => goHistory(1),
+          },
+        ]
+      : []),
+    {
       name: "Open folder",
       shortcut: `${keyboard}+Shift+O`,
       run: () => chooseWorkspace(),
@@ -1065,6 +2026,18 @@ export default function App() {
       run: () => createEntry(false),
     },
     { name: "New folder", run: () => createEntry(true) },
+    ...(current
+      ? [
+          {
+            name: split ? "Close split view" : "Split editor",
+            run: () => (split ? setSplit(null) : openBeside()),
+          },
+          {
+            name: "Local version history",
+            run: () => showHistory(current.path),
+          },
+        ]
+      : []),
     ...(current && current.mode === "source" && supportsFormatting(current.path)
       ? [
           {
@@ -1084,7 +2057,7 @@ export default function App() {
       shortcut: `${keyboard}+Shift+S`,
       run: () => saveAll(),
     },
-    { name: "New terminal", run: addTerminal },
+    { name: "New terminal", run: () => addTerminal() },
     {
       name: "Toggle terminal",
       shortcut: `${keyboard}+\u0060`,
@@ -1119,23 +2092,43 @@ export default function App() {
         ]
       : []),
   ];
-  const paletteItems =
-    palette === "commands"
+  const rankedFiles = useMemo(
+    () =>
+      palette === "files"
+        ? quickFiles(entries, parseFileQuery(query).query, recentFiles.current)
+        : [],
+    [palette, query, entries, recentFiles.current],
+  );
+  const paletteItems = !palette
+    ? []
+    : palette === "commands"
       ? commands
           .filter((c) => c.name.toLowerCase().includes(query.toLowerCase()))
           .map((c) => ({ label: c.name, detail: c.shortcut, run: c.run }))
-      : entries
-          .filter(
-            (e) =>
-              !e.directory &&
-              e.path.toLowerCase().includes(query.toLowerCase()),
-          )
-          .slice(0, 100)
-          .map((e) => ({
-            label: e.name,
-            detail: dirname(e.path),
-            run: () => openFile(e.path),
-          }));
+      : rankedFiles.map((entry) => ({
+          label: entry.name,
+          detail:
+            entry.path +
+            (parseFileQuery(query).line
+              ? ` · Line ${parseFileQuery(query).line}:${parseFileQuery(query).column}`
+              : recentFiles.current.includes(entry.path)
+                ? " · Recent"
+                : ""),
+          run: () => {
+            const { line, column } = parseFileQuery(query);
+            if (paletteBeside.current) {
+              paletteBeside.current = false;
+              return openBeside(entry.path);
+            }
+            return openFile(
+              entry.path,
+              undefined,
+              line
+                ? { mode: "source", line, column, preserveText: true }
+                : undefined,
+            );
+          },
+        }));
   const displayedEntries = entries.filter((e) =>
     treeFilter
       ? e.path.toLowerCase().includes(treeFilter.toLowerCase()) ||
@@ -1151,16 +2144,137 @@ export default function App() {
             expanded.includes(parts.slice(0, index + 1).join("/")),
           ),
   );
-  const outline =
-    current?.text
-      .split("\n")
-      .map((line, index) => ({
-        line,
-        index,
-        match: line.match(/^(#{1,6})\s+(.+)/),
-      }))
-      .filter((item) => item.match) || [];
-
+  function focusExplorer(path: string, extend = false) {
+    if (!path) return;
+    chooseSelection(path, extend ? "range" : "single");
+    requestAnimationFrame(() => {
+      const row = Array.from(
+        document.querySelectorAll<HTMLElement>('[role="treeitem"]'),
+      ).find((row) => row.getAttribute("aria-label") === path);
+      row?.focus();
+      row?.scrollIntoView({ block: "nearest" });
+    });
+  }
+  function explorerKey(event: React.KeyboardEvent, entry?: Entry) {
+    if ((event.target as HTMLElement).closest("button")) return;
+    if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "a") {
+      event.preventDefault();
+      event.stopPropagation();
+      const paths = displayedEntries.slice(0, 100).map((entry) => entry.path);
+      selectionRef.current = paths;
+      setSelection(paths);
+      if (displayedEntries.length > 100)
+        notify("Selected the first 100 visible items.");
+      return;
+    }
+    if (event.altKey || event.metaKey || event.ctrlKey) return;
+    if (event.key === "Escape" && selectionRef.current.length > 1) {
+      event.preventDefault();
+      event.stopPropagation();
+      chooseSelection(selected);
+      return;
+    }
+    const index = entry
+      ? displayedEntries.findIndex((item) => item.path === entry.path)
+      : -1;
+    const focus = (index: number) =>
+      focusExplorer(
+        displayedEntries[
+          Math.max(0, Math.min(displayedEntries.length - 1, index))
+        ]?.path,
+        event.shiftKey,
+      );
+    if (["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) {
+      event.preventDefault();
+      event.stopPropagation();
+      focus(
+        event.key === "Home"
+          ? 0
+          : event.key === "End"
+            ? displayedEntries.length - 1
+            : index + (event.key === "ArrowUp" ? -1 : 1),
+      );
+      return;
+    }
+    if (entry && (event.key === "ArrowRight" || event.key === "ArrowLeft")) {
+      event.preventDefault();
+      event.stopPropagation();
+      if (event.key === "ArrowRight") {
+        if (entry.directory && !expanded.includes(entry.path))
+          setExpanded((previous) => [...previous, entry.path]);
+        else if (
+          entry.directory &&
+          displayedEntries[index + 1]?.path.startsWith(entry.path + "/")
+        )
+          focus(index + 1);
+      } else if (entry.directory && expanded.includes(entry.path))
+        setExpanded((previous) =>
+          previous.filter((path) => path !== entry.path),
+        );
+      else focusExplorer(dirname(entry.path));
+      return;
+    }
+    if (event.key === "Enter" || event.key === " ") {
+      event.preventDefault();
+      event.stopPropagation();
+      if (!entry) {
+        focus(0);
+        return;
+      }
+      if (entry.directory)
+        setExpanded((previous) =>
+          previous.includes(entry.path)
+            ? previous.filter((path) => path !== entry.path)
+            : [...previous, entry.path],
+        );
+      else void openFile(entry.path);
+      return;
+    }
+    if (entry && event.key === "F2") {
+      event.preventDefault();
+      event.stopPropagation();
+      void moveEntry(entry.path);
+      return;
+    }
+    if (entry && event.key === "Delete") {
+      event.preventDefault();
+      event.stopPropagation();
+      if (
+        selectionRef.current.length > 1 &&
+        selectionRef.current.includes(entry.path)
+      )
+        void trashSelected();
+      else void deleteEntry(entry.path);
+      return;
+    }
+    if (
+      event.key.length === 1 &&
+      !event.metaKey &&
+      !event.ctrlKey &&
+      !event.altKey
+    ) {
+      event.preventDefault();
+      event.stopPropagation();
+      const now = Date.now(),
+        previous = explorerTyping.current;
+      const value =
+        now - previous.time < 800
+          ? previous.value + event.key.toLowerCase()
+          : event.key.toLowerCase();
+      explorerTyping.current = { value, time: now };
+      const prefix = [...value].every((char) => char === value[0])
+        ? value[0]
+        : value;
+      const ordered = [
+        ...displayedEntries.slice(index + 1),
+        ...displayedEntries.slice(0, index + 1),
+      ];
+      const found = ordered.find((item) =>
+        item.name.toLowerCase().startsWith(prefix),
+      );
+      if (found) focusExplorer(found.path);
+    }
+  }
   if (loading)
     return (
       <div className="loading-screen">
@@ -1174,7 +2288,15 @@ export default function App() {
     <div
       className={"application" + (settings.focusMode ? " focus-mode" : "")}
       ref={appRef}
+      style={
+        {
+          "--reading-font-size": settings.readingFontSize + "px",
+          "--reading-line-height": settings.readingLineHeight,
+          "--reading-width": settings.readingWidth + "px",
+        } as React.CSSProperties
+      }
     >
+      <Tooltip />
       <header className="app-header">
         <div className="brand">
           <div className="brand-icon">
@@ -1188,7 +2310,7 @@ export default function App() {
           <span className="workspace-badge">LOCAL WORKSPACE</span>
           <ChevronRight size={14} />
           <button
-            title={root || "Open a folder"}
+            data-tooltip={root || "Open a folder"}
             onClick={() => void chooseWorkspace()}
           >
             {root ? basename(root) : "Choose a folder"}
@@ -1210,7 +2332,7 @@ export default function App() {
           <button
             className="icon-button"
             aria-label="Toggle focus mode"
-            title="Focus mode"
+            data-tooltip="Focus mode"
             onClick={() =>
               void updateSettings({ focusMode: !settings.focusMode })
             }
@@ -1231,7 +2353,7 @@ export default function App() {
           <button
             className="icon-button"
             aria-label="Preferences"
-            title={`${keyboard}+,`}
+            data-tooltip={`${keyboard}+,`}
             onClick={() => setShowSettings(true)}
           >
             <Settings2 />
@@ -1243,21 +2365,26 @@ export default function App() {
           <nav className="activity-bar" aria-label="Workspace tools">
             <button
               className={
-                "activity-button " + (settings.sidebarVisible ? "active" : "")
+                "activity-button " +
+                (settings.sidebarVisible && sidebarMode === "files"
+                  ? "active"
+                  : "")
               }
-              title="Explorer"
+              data-tooltip="Explorer"
               aria-label="Toggle explorer"
-              onClick={() =>
+              onClick={() => {
+                setSidebarMode("files");
                 void updateSettings({
-                  sidebarVisible: !settings.sidebarVisible,
-                })
-              }
+                  sidebarVisible:
+                    sidebarMode === "search" || !settings.sidebarVisible,
+                });
+              }}
             >
               <FolderOpen />
             </button>
             <button
               className="activity-button"
-              title="Quick open"
+              data-tooltip="Quick open"
               aria-label="Quick open"
               onClick={() => {
                 setPalette("files");
@@ -1269,9 +2396,22 @@ export default function App() {
             </button>
             <button
               className={
+                "activity-button " +
+                (sidebarMode === "search" && settings.sidebarVisible
+                  ? "active"
+                  : "")
+              }
+              aria-label="Search workspace"
+              data-tooltip={`Search workspace (${keyboard}+Shift+F)`}
+              onClick={showWorkspaceSearch}
+            >
+              <SearchCode />
+            </button>
+            <button
+              className={
                 "activity-button " + (settings.terminalVisible ? "active" : "")
               }
-              title="Terminal"
+              data-tooltip="Terminal"
               aria-label="Toggle terminal"
               onClick={() =>
                 void updateSettings({
@@ -1285,7 +2425,7 @@ export default function App() {
               <button
                 className="activity-button"
                 aria-label="Command palette"
-                title="Command palette"
+                data-tooltip="Command palette"
                 onClick={() => {
                   setPalette("commands");
                   setQuery("");
@@ -1296,7 +2436,7 @@ export default function App() {
               </button>
               <div
                 className="local-indicator"
-                title="Your files stay on this computer"
+                data-tooltip="Your files stay on this computer"
               />
             </div>
           </nav>
@@ -1304,218 +2444,290 @@ export default function App() {
         {settings.sidebarVisible && !settings.focusMode && (
           <>
             <aside className="sidebar" style={{ width: settings.sidebarWidth }}>
-              <div className="sidebar-heading">
-                <span>EXPLORER</span>
-                <button
-                  className="icon-button small"
-                  aria-label="Open workspace folder"
-                  title="Open folder"
-                  onClick={() => void chooseWorkspace()}
-                >
-                  <FolderOpen />
-                </button>
-                <button
-                  className="icon-button small"
-                  aria-label="Collapse explorer"
-                  onClick={() => void updateSettings({ sidebarVisible: false })}
-                >
-                  <PanelLeftClose />
-                </button>
-              </div>
-              <div className="folder-heading">
-                <ChevronDown size={15} />
-                <strong title={root}>
-                  {root ? basename(root) : "No folder open"}
-                </strong>
-                <span className="grow" />
-                <button
-                  className="icon-button small"
-                  aria-label="New document"
-                  title="New document"
-                  onClick={() => void createEntry(false)}
-                >
-                  <FilePlus2 />
-                </button>
-                <button
-                  className="icon-button small"
-                  aria-label="New folder"
-                  title="New folder"
-                  onClick={() => void createEntry(true)}
-                >
-                  <FolderPlus />
-                </button>
-              </div>
-              <label className="tree-filter">
-                <Search size={14} />
-                <input
-                  aria-label="Filter explorer"
-                  placeholder="Filter files…"
-                  value={treeFilter}
-                  onChange={(e) => setTreeFilter(e.target.value)}
+              {sidebarMode === "search" ? (
+                <WorkspaceSearch
+                  root={root}
+                  options={searchOptions}
+                  onChange={setSearchOptions}
+                  tabs={tabs}
+                  onOpen={openSearchResult}
+                  onClose={() => setSidebarMode("files")}
                 />
-                {treeFilter && (
-                  <button
-                    className="icon-button small"
-                    aria-label="Clear filter"
-                    onClick={() => setTreeFilter("")}
-                  >
-                    <X />
-                  </button>
-                )}
-              </label>
-              <div
-                className="file-tree"
-                role="tree"
-                aria-label="Workspace files"
-                onDragOver={(e) => {
-                  e.preventDefault();
-                  e.dataTransfer.dropEffect = "move";
-                }}
-                onDrop={(e) => {
-                  e.preventDefault();
-                  const from = e.dataTransfer.getData(
-                    "application/x-margin-path",
-                  );
-                  if (from) void moveEntry(from, basename(from));
-                }}
-              >
-                {displayedEntries.map((entry) => (
+              ) : (
+                <>
+                  <div className="sidebar-heading">
+                    <span>EXPLORER</span>
+                    <button
+                      className="icon-button small"
+                      aria-label="Open workspace folder"
+                      data-tooltip="Open folder"
+                      onClick={() => void chooseWorkspace()}
+                    >
+                      <FolderOpen />
+                    </button>
+                    <button
+                      className="icon-button small"
+                      aria-label="Collapse explorer"
+                      onClick={() =>
+                        void updateSettings({ sidebarVisible: false })
+                      }
+                    >
+                      <PanelLeftClose />
+                    </button>
+                  </div>
+                  <div className="folder-heading">
+                    <ChevronDown size={15} />
+                    <strong data-tooltip={root}>
+                      {root ? basename(root) : "No folder open"}
+                    </strong>
+                    <span className="grow" />
+                    <button
+                      className="icon-button small"
+                      aria-label="New document"
+                      data-tooltip="New document"
+                      onClick={() => void createEntry(false)}
+                    >
+                      <FilePlus2 />
+                    </button>
+                    <button
+                      className="icon-button small"
+                      aria-label="New folder"
+                      data-tooltip="New folder"
+                      onClick={() => void createEntry(true)}
+                    >
+                      <FolderPlus />
+                    </button>
+                  </div>
+                  <label className="tree-filter">
+                    <Search size={14} />
+                    <input
+                      aria-label="Filter explorer"
+                      placeholder="Filter files…"
+                      value={treeFilter}
+                      onChange={(e) => setTreeFilter(e.target.value)}
+                    />
+                    {treeFilter && (
+                      <button
+                        className="icon-button small"
+                        aria-label="Clear filter"
+                        onClick={() => setTreeFilter("")}
+                      >
+                        <X />
+                      </button>
+                    )}
+                  </label>
+                  {selection.length > 1 && (
+                    <div className="selection-actions">
+                      <span>{selection.length} selected</span>
+                      <button
+                        aria-label="Move selected items"
+                        onClick={() => void moveSelected()}
+                      >
+                        Move…
+                      </button>
+                      <button
+                        aria-label="Trash selected items"
+                        onClick={() => void trashSelected()}
+                      >
+                        Trash…
+                      </button>
+                      <button
+                        aria-label="Clear explorer selection"
+                        onClick={() => {
+                          setSelection([]);
+                          selectionRef.current = [];
+                        }}
+                      >
+                        Clear
+                      </button>
+                    </div>
+                  )}
                   <div
-                    key={entry.path}
-                    role="treeitem"
-                    aria-label={entry.path}
-                    aria-selected={selected === entry.path}
-                    aria-expanded={
-                      entry.directory
-                        ? expanded.includes(entry.path)
-                        : undefined
-                    }
-                    tabIndex={0}
-                    className={
-                      "tree-row " +
-                      (active === entry.path ? "current " : "") +
-                      (selected === entry.path ? "selected" : "")
-                    }
-                    style={{
-                      paddingLeft: 12 + (entry.path.split("/").length - 1) * 16,
-                    }}
-                    draggable
-                    onDragStart={(e) => {
-                      e.dataTransfer.setData(
-                        "application/x-margin-path",
-                        entry.path,
+                    className="file-tree"
+                    role="tree"
+                    aria-label="Workspace files"
+                    aria-multiselectable="true"
+                    tabIndex={displayedEntries.length ? -1 : 0}
+                    onKeyDown={(event) => explorerKey(event)}
+                    onContextMenu={(event) => {
+                      if (
+                        event.defaultPrevented ||
+                        (event.target as HTMLElement).closest(
+                          '[role="treeitem"]',
+                        )
+                      )
+                        return;
+                      event.preventDefault();
+                      setSelected("");
+                      explorerMenu(
+                        "",
+                        event.clientX,
+                        event.clientY,
+                        event.currentTarget,
                       );
-                      e.dataTransfer.effectAllowed = "move";
                     }}
                     onDragOver={(e) => {
-                      if (entry.directory) {
-                        e.preventDefault();
-                        e.stopPropagation();
-                        e.dataTransfer.dropEffect = "move";
-                      }
+                      e.preventDefault();
+                      e.dataTransfer.dropEffect = "move";
                     }}
                     onDrop={(e) => {
-                      if (entry.directory) {
-                        e.preventDefault();
-                        e.stopPropagation();
-                        const from = e.dataTransfer.getData(
-                          "application/x-margin-path",
-                        );
-                        if (from)
-                          void moveEntry(
-                            from,
-                            entry.path + "/" + basename(from),
-                          );
-                      }
-                    }}
-                    onClick={() => {
-                      setSelected(entry.path);
-                      if (entry.directory)
-                        setExpanded((previous) =>
-                          previous.includes(entry.path)
-                            ? previous.filter((p) => p !== entry.path)
-                            : [...previous, entry.path],
-                        );
-                      else void openFile(entry.path);
-                    }}
-                    onDoubleClick={() => {
-                      if (entry.directory) setSelected(entry.path);
-                    }}
-                    onContextMenu={(e) => {
                       e.preventDefault();
-                      setSelected(entry.path);
-                      setContext({
-                        path: entry.path,
-                        x: e.clientX,
-                        y: e.clientY,
-                      });
-                    }}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter") {
-                        e.preventDefault();
-                        if (entry.directory)
-                          setExpanded((previous) =>
-                            previous.includes(entry.path)
-                              ? previous.filter((p) => p !== entry.path)
-                              : [...previous, entry.path],
-                          );
-                        else void openFile(entry.path);
-                      }
-                      if (e.key === "F2") {
-                        e.preventDefault();
-                        void moveEntry(entry.path);
-                      }
-                      if (e.key === "Delete") {
-                        e.preventDefault();
-                        void deleteEntry(entry.path);
-                      }
+                      droppedSelection(e, "");
                     }}
                   >
-                    <span className="tree-chevron">
-                      {entry.directory ? (
-                        expanded.includes(entry.path) ? (
-                          <ChevronDown size={13} />
-                        ) : (
-                          <ChevronRight size={13} />
-                        )
-                      ) : null}
-                    </span>
-                    <FileIcon path={entry.path} directory={entry.directory} />
-                    <span className="tree-label">{entry.name}</span>
-                    {tabs.some((t) => t.path === entry.path && t.dirty) && (
-                      <span className="dirty-dot" />
+                    {displayedEntries.map((entry) => (
+                      <div
+                        key={entry.path}
+                        role="treeitem"
+                        aria-label={entry.path}
+                        aria-selected={selection.includes(entry.path)}
+                        aria-expanded={
+                          entry.directory
+                            ? expanded.includes(entry.path)
+                            : undefined
+                        }
+                        tabIndex={
+                          entry.path ===
+                          (displayedEntries.some(
+                            (item) => item.path === selected,
+                          )
+                            ? selected
+                            : displayedEntries[0]?.path)
+                            ? 0
+                            : -1
+                        }
+                        aria-level={entry.path.split("/").length}
+                        onFocus={() => setSelected(entry.path)}
+                        className={
+                          "tree-row " +
+                          (active === entry.path ? "current " : "") +
+                          (selection.includes(entry.path) ? "selected" : "")
+                        }
+                        style={{
+                          paddingLeft:
+                            12 + (entry.path.split("/").length - 1) * 16,
+                        }}
+                        draggable
+                        onDragStart={(e) => {
+                          e.dataTransfer.setData(
+                            "application/x-margin-path",
+                            entry.path,
+                          );
+                          const paths = selectionRef.current.includes(
+                            entry.path,
+                          )
+                            ? selectionRef.current
+                            : [entry.path];
+                          e.dataTransfer.setData(
+                            "application/x-margin-paths",
+                            JSON.stringify(paths),
+                          );
+                          e.dataTransfer.effectAllowed = "move";
+                        }}
+                        onDragOver={(e) => {
+                          if (entry.directory) {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            e.dataTransfer.dropEffect = "move";
+                          }
+                        }}
+                        onDrop={(e) => {
+                          if (entry.directory) {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            droppedSelection(e, entry.path);
+                          }
+                        }}
+                        onClick={(event) => {
+                          chooseSelection(
+                            entry.path,
+                            event.shiftKey
+                              ? "range"
+                              : event.metaKey || event.ctrlKey
+                                ? "toggle"
+                                : "single",
+                          );
+                          if (event.shiftKey || event.metaKey || event.ctrlKey)
+                            return;
+                          if (entry.directory)
+                            setExpanded((previous) =>
+                              previous.includes(entry.path)
+                                ? previous.filter((p) => p !== entry.path)
+                                : [...previous, entry.path],
+                            );
+                          else void openFile(entry.path);
+                        }}
+                        onDoubleClick={() => {
+                          if (entry.directory) setSelected(entry.path);
+                        }}
+                        onContextMenu={(e) => {
+                          e.preventDefault();
+                          setSelected(entry.path);
+                          if (!selectionRef.current.includes(entry.path))
+                            chooseSelection(entry.path);
+                          explorerMenu(
+                            entry.path,
+                            e.clientX,
+                            e.clientY,
+                            e.currentTarget,
+                          );
+                        }}
+                        onKeyDown={(event) => explorerKey(event, entry)}
+                      >
+                        <span className="tree-chevron">
+                          {entry.directory ? (
+                            expanded.includes(entry.path) ? (
+                              <ChevronDown size={13} />
+                            ) : (
+                              <ChevronRight size={13} />
+                            )
+                          ) : null}
+                        </span>
+                        <FileIcon
+                          path={entry.path}
+                          directory={entry.directory}
+                        />
+                        <span className="tree-label">{entry.name}</span>
+                        {tabs.some((t) => t.path === entry.path && t.dirty) && (
+                          <span className="dirty-dot" />
+                        )}
+                        <button
+                          className="row-menu icon-button small"
+                          aria-label={`Actions for ${entry.name}`}
+                          tabIndex={-1}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            if (!selectionRef.current.includes(entry.path))
+                              chooseSelection(entry.path);
+                            explorerMenu(
+                              entry.path,
+                              e.clientX,
+                              e.clientY,
+                              e.currentTarget,
+                            );
+                          }}
+                        >
+                          <MoreHorizontal />
+                        </button>
+                      </div>
+                    ))}
+                    {root && !entries.length && (
+                      <div className="tree-empty">
+                        A little room to think.
+                        <button onClick={() => void createEntry(false)}>
+                          Create your first note <Plus size={14} />
+                        </button>
+                      </div>
                     )}
-                    <button
-                      className="row-menu icon-button small"
-                      aria-label={`Actions for ${entry.name}`}
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        setContext({
-                          path: entry.path,
-                          x: e.clientX,
-                          y: e.clientY,
-                        });
-                      }}
-                    >
-                      <MoreHorizontal />
-                    </button>
                   </div>
-                ))}
-                {root && !entries.length && (
-                  <div className="tree-empty">
-                    A little room to think.
-                    <button onClick={() => void createEntry(false)}>
-                      Create your first note <Plus size={14} />
-                    </button>
+                  <div className="sidebar-footer">
+                    <span className="local-indicator" />
+                    Files on your device
+                    <span className="grow" />
+                    <span>{entries.filter((e) => !e.directory).length}</span>
                   </div>
-                )}
-              </div>
-              <div className="sidebar-footer">
-                <span className="local-indicator" />
-                Files on your device
-                <span className="grow" />
-                <span>{entries.filter((e) => !e.directory).length}</span>
-              </div>
+                </>
+              )}
             </aside>
             <div
               className="resize-handle sidebar-resize"
@@ -1542,99 +2754,202 @@ export default function App() {
             />
           </>
         )}
-        <main className="main-workspace">
-          <div className="tabs-bar" role="tablist" aria-label="Open files">
-            {(!settings.sidebarVisible || settings.focusMode) && (
+        <main
+          className="main-workspace"
+          onPointerDownCapture={(event) => {
+            if (
+              (event.target as HTMLElement).closest(
+                ".editor-pane.active .document-content,.editor-pane.active .cm-editor",
+              )
+            )
+              editorInteraction.current++;
+          }}
+          onKeyDownCapture={(event) => {
+            if (
+              (event.target as HTMLElement).closest(
+                ".editor-pane.active .document-content,.editor-pane.active .cm-editor",
+              )
+            )
+              editorInteraction.current++;
+          }}
+        >
+          <div className="tabs-bar">
+            <div className="navigation-buttons">
               <button
-                className="icon-button"
-                aria-label="Show explorer"
-                onClick={() =>
-                  void updateSettings({
-                    sidebarVisible: true,
-                    focusMode: false,
-                  })
-                }
+                className="icon-button small"
+                aria-label="Navigate back"
+                data-tooltip="Back (Alt+Left)"
+                disabled={navigation.current.index <= 0}
+                onClick={() => void goHistory(-1)}
               >
-                <PanelLeftOpen />
+                <ArrowLeft />
               </button>
-            )}
-            {tabs.map((tab) => (
-              <div
-                key={tab.path}
-                role="tab"
-                aria-selected={active === tab.path}
-                title={tab.path}
-                className={
-                  "editor-tab " + (active === tab.path ? "active" : "")
+              <button
+                className="icon-button small"
+                aria-label="Navigate forward"
+                data-tooltip="Forward (Alt+Right)"
+                disabled={
+                  navigation.current.index < 0 ||
+                  navigation.current.index >=
+                    navigation.current.entries.length - 1
                 }
-                tabIndex={0}
-                onClick={() => {
-                  setActive(tab.path);
-                  activeRef.current = tab.path;
-                }}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter" || e.key === " ") {
-                    setActive(tab.path);
-                    activeRef.current = tab.path;
-                  }
-                }}
+                onClick={() => void goHistory(1)}
               >
-                <FileIcon path={tab.path} />
-                <span>{basename(tab.path)}</span>
-                {tab.conflict ? (
-                  <AlertTriangle size={12} className="warning" />
-                ) : tab.dirty ? (
-                  <span className="dirty-dot" />
-                ) : null}
+                <ArrowRight />
+              </button>
+            </div>
+            <div
+              className="tabs-scroll"
+              role="tablist"
+              aria-label="Open files"
+              tabIndex={0}
+              onContextMenu={(event) => {
+                if (
+                  event.defaultPrevented ||
+                  (event.target as HTMLElement).closest('[role="tab"]')
+                )
+                  return;
+                event.preventDefault();
+                const element = event.currentTarget;
+                openMenu({
+                  x: event.clientX,
+                  y: event.clientY,
+                  restoreFocus: () => element.focus(),
+                  items: [
+                    {
+                      label: "Reopen closed tab",
+                      shortcut: `${keyboard}+Shift+T`,
+                      disabled: !closedTabs.current.length,
+                      run: () => reopenClosed(),
+                    },
+                    ...(closedTabs.current.length
+                      ? [
+                          {
+                            label: "Recently closed",
+                            children: [...closedTabs.current]
+                              .reverse()
+                              .map((entry) => ({
+                                label: entry.path,
+                                run: () => reopenClosed(entry.path),
+                              })),
+                          },
+                        ]
+                      : []),
+                  ],
+                });
+              }}
+            >
+              {(!settings.sidebarVisible || settings.focusMode) && (
                 <button
-                  className="tab-close"
-                  aria-label={`Close ${basename(tab.path)}`}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    void closeTab(tab.path);
+                  className="icon-button"
+                  aria-label="Show explorer"
+                  onClick={() =>
+                    void updateSettings({
+                      sidebarVisible: true,
+                      focusMode: false,
+                    })
+                  }
+                >
+                  <PanelLeftOpen />
+                </button>
+              )}
+              {tabs.map((tab) => (
+                <div
+                  key={tab.path}
+                  role="tab"
+                  aria-selected={active === tab.path}
+                  data-tooltip={tab.path}
+                  className={
+                    "editor-tab " +
+                    (active === tab.path ? "active " : "") +
+                    (tab.pinned ? "pinned" : "")
+                  }
+                  tabIndex={0}
+                  draggable
+                  aria-description={
+                    tab.pinned
+                      ? "Pinned tab, kept open during bulk close"
+                      : undefined
+                  }
+                  onDragStart={(event) => {
+                    draggedTab.current = tab.path;
+                    event.dataTransfer.setData(
+                      "application/x-margin-tab",
+                      tab.path,
+                    );
+                    event.dataTransfer.effectAllowed = "move";
+                  }}
+                  onDragEnd={() => {
+                    draggedTab.current = null;
+                  }}
+                  onDragOver={(event) => {
+                    if (
+                      draggedTab.current &&
+                      !!tabsRef.current.find(
+                        (entry) => entry.path === draggedTab.current,
+                      )?.pinned === !!tab.pinned
+                    ) {
+                      event.preventDefault();
+                      event.dataTransfer.dropEffect = "move";
+                    }
+                  }}
+                  onDrop={(event) => {
+                    event.preventDefault();
+                    const from = event.dataTransfer.getData(
+                      "application/x-margin-tab",
+                    );
+                    reorderTab(from, tab.path);
+                    draggedTab.current = null;
+                  }}
+                  onContextMenu={(event) => {
+                    event.preventDefault();
+                    tabMenu(
+                      tab.path,
+                      event.clientX,
+                      event.clientY,
+                      event.currentTarget,
+                    );
+                  }}
+                  onClick={() => {
+                    void openFile(tab.path);
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" || e.key === " ") {
+                      void openFile(tab.path);
+                    }
                   }}
                 >
-                  <X size={13} />
-                </button>
-              </div>
-            ))}
-            <button
-              className="icon-button tab-add"
-              aria-label="New tab document"
-              onClick={() => void createEntry(false)}
-            >
-              <Plus />
-            </button>
-            <span className="grow" />
-            {root && (
-              <button
-                className="icon-button"
-                aria-label="Show outline"
-                title="Document outline"
-                onClick={() => setShowOutline(!showOutline)}
-              >
-                <ListTree />
-              </button>
-            )}
-          </div>
-          {current && (
-            <div className="document-header">
-              <div className="breadcrumbs">
-                <span>{root ? basename(root) : ""}</span>
-                {current.path.split("/").map((part, i) => (
-                  <span
-                    className={
-                      i === current.path.split("/").length - 1
-                        ? "breadcrumb-current"
-                        : ""
-                    }
-                    key={i}
+                  <FileIcon path={tab.path} />
+                  {tab.pinned && (
+                    <Pin size={12} className="tab-pin" aria-label="Pinned" />
+                  )}
+                  <span>{basename(tab.path)}</span>
+                  {tab.conflict ? (
+                    <AlertTriangle size={12} className="warning" />
+                  ) : tab.dirty ? (
+                    <span className="dirty-dot" />
+                  ) : null}
+                  <button
+                    className="tab-close"
+                    aria-label={`Close ${basename(tab.path)}`}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      void closeTab(tab.path);
+                    }}
                   >
-                    <ChevronRight size={13} />
-                    {part}
-                  </span>
-                ))}
-              </div>
+                    <X size={13} />
+                  </button>
+                </div>
+              ))}
+              <button
+                className="icon-button tab-add"
+                aria-label="New tab document"
+                onClick={() => void createEntry(false)}
+              >
+                <Plus />
+              </button>
+            </div>
+            {current && (
               <div className="document-actions">
                 {current.dirty ? (
                   <span className="save-state">Unsaved</span>
@@ -1668,14 +2983,55 @@ export default function App() {
                 <button
                   className="icon-button small"
                   aria-label="Save file"
-                  title={`${keyboard}+S`}
+                  data-tooltip={`${keyboard}+S`}
                   onClick={() => void saveTab(current.path)}
                 >
                   <Save />
                 </button>
               </div>
-            </div>
-          )}
+            )}
+            <button
+              className="icon-button small"
+              aria-label="Reopen closed tab"
+              data-tooltip={`Reopen closed tab (${keyboard}+Shift+T)`}
+              disabled={!closedTabs.current.length}
+              onClick={() => void reopenClosed()}
+            >
+              <RotateCcw />
+            </button>
+            {current && (
+              <button
+                className="icon-button"
+                aria-label={split ? "Close split view" : "Split editor"}
+                data-tooltip={split ? "Close split view" : "Split editor"}
+                onClick={() => (split ? setSplit(null) : void openBeside())}
+              >
+                <Columns2 />
+              </button>
+            )}
+            {current && !isImage(current.path) && (
+              <button
+                className="icon-button"
+                aria-label="Local version history"
+                data-tooltip="Local version history"
+                onClick={() => void showHistory(current.path)}
+              >
+                <History />
+              </button>
+            )}
+            {root && (
+              <button
+                className="icon-button"
+                aria-label="Show outline"
+                aria-expanded={showOutline}
+                aria-controls="document-outline"
+                data-tooltip="Document outline"
+                onClick={() => setShowOutline(!showOutline)}
+              >
+                <ListTree />
+              </button>
+            )}
+          </div>
           {recovery.length > 0 && (
             <div className="recovery-banner">
               <AlertTriangle size={16} />A previous file operation needs
@@ -1685,16 +3041,70 @@ export default function App() {
               </button>
             </div>
           )}
-          <div className="editor-area">
+          <div className={"editor-area" + (split ? " split" : "")}>
             {tabs.map((tab) => (
               <section
                 key={tab.path + ":" + tab.version}
                 className={
-                  "editor-pane " + (active === tab.path ? "active" : "")
+                  "editor-pane " +
+                  (active === tab.path ? "active " : "") +
+                  (split &&
+                  (split.left === tab.path || split.right === tab.path)
+                    ? "split-visible"
+                    : "")
                 }
-                inert={active !== tab.path}
+                inert={
+                  active !== tab.path &&
+                  split?.left !== tab.path &&
+                  split?.right !== tab.path
+                }
+                style={
+                  split
+                    ? {
+                        gridColumn: split.left === tab.path ? 1 : 2,
+                        gridRow: 1,
+                      }
+                    : undefined
+                }
+                onPointerDownCapture={() => {
+                  if (
+                    split &&
+                    (split.left === tab.path || split.right === tab.path)
+                  )
+                    focusPane(tab.path);
+                }}
+                onFocusCapture={() => {
+                  if (
+                    split &&
+                    (split.left === tab.path || split.right === tab.path)
+                  )
+                    focusPane(tab.path);
+                }}
                 aria-label={`Editor for ${basename(tab.path)}`}
+                data-path={tab.path}
               >
+                {split &&
+                  (split.left === tab.path || split.right === tab.path) && (
+                    <div className="split-pane-title">
+                      <span data-tooltip={tab.path}>{tab.path}</span>
+                      <button
+                        className="icon-button small"
+                        aria-label={
+                          split.left === tab.path
+                            ? "Close left pane"
+                            : "Close right pane"
+                        }
+                        onClick={() => {
+                          const other =
+                            split.left === tab.path ? split.right : split.left;
+                          setSplit(null);
+                          void openFile(other);
+                        }}
+                      >
+                        <X size={12} />
+                      </button>
+                    </div>
+                  )}
                 {tab.conflict && (
                   <div className="conflict-banner">
                     <AlertTriangle size={16} />
@@ -1710,13 +3120,7 @@ export default function App() {
                   </div>
                 )}
                 {isImage(tab.path) ? (
-                  <div className="image-preview">
-                    <img
-                      src={assetURL(tab.path, basename(tab.path))}
-                      alt={basename(tab.path)}
-                    />
-                    <p>{tab.path}</p>
-                  </div>
+                  <ImagePreview path={tab.path} />
                 ) : isMarkdown(tab.path) && tab.mode === "visual" ? (
                   <MarkdownEditor
                     path={tab.path}
@@ -1724,28 +3128,37 @@ export default function App() {
                     onChange={(text) => edit(tab.path, text)}
                     onError={(text) => notify(text, true)}
                     onLink={(href) => void followLink(tab.path, href)}
+                    entries={entries}
+                    tabs={tabs}
+                    active={active === tab.path}
+                    visible={
+                      active === tab.path ||
+                      split?.left === tab.path ||
+                      split?.right === tab.path
+                    }
+                    position={positions.current.get(tab.path) || tab.position}
                   />
                 ) : (
                   <>
-                    <div className="source-label">
-                      <Code2 size={13} />
-                      {isMarkdown(tab.path)
-                        ? "MARKDOWN SOURCE"
-                        : (
-                            tab.path.split(".").pop() || "PLAIN TEXT"
-                          ).toUpperCase()}
-                      {isMarkdown(tab.path) && visualProtection(tab.text) && (
-                        <span>
-                          Source preserves {visualProtection(tab.text)}
-                        </span>
-                      )}
-                    </div>
+                    {isMarkdown(tab.path) && visualProtection(tab.text) && (
+                      <div className="source-protection">
+                        Source preserves {visualProtection(tab.text)}
+                      </div>
+                    )}
                     <CodeEditor
                       path={tab.path}
                       text={tab.text}
                       settings={settings}
                       active={active === tab.path}
-                      allowAutoFormat={!tab.dirty && !tab.conflict}
+                      visible={
+                        active === tab.path ||
+                        split?.left === tab.path ||
+                        split?.right === tab.path
+                      }
+                      allowAutoFormat={
+                        !tab.dirty && !tab.conflict && !tab.suppressAutoFormat
+                      }
+                      position={positions.current.get(tab.path) || tab.position}
                       onChange={(text) => edit(tab.path, text)}
                       onError={(text) => notify(text, true)}
                     />
@@ -1814,53 +3227,18 @@ export default function App() {
                 </div>
               </div>
             )}
-            {showOutline && current && isMarkdown(current.path) && (
-              <aside className="outline">
-                <div className="sidebar-heading">
-                  ON THIS PAGE
-                  <button
-                    className="icon-button small"
-                    aria-label="Close outline"
-                    onClick={() => setShowOutline(false)}
-                  >
-                    <X />
-                  </button>
-                </div>
-                {outline.length ? (
-                  outline.map((item) => (
-                    <button
-                      key={item.index}
-                      style={{
-                        paddingLeft: 12 + (item.match![1].length - 1) * 10,
-                      }}
-                      onClick={() => {
-                        if (current.mode === "source") {
-                          window.dispatchEvent(
-                            new CustomEvent("margin:goto-line", {
-                              detail: {
-                                path: current.path,
-                                line: item.index + 1,
-                              },
-                            }),
-                          );
-                          return;
-                        }
-                        const headings = appRef.current
-                          ?.querySelector(".editor-pane.active")
-                          ?.querySelectorAll("h1,h2,h3,h4,h5,h6");
-                        const match = Array.from(headings || []).find(
-                          (h) => h.textContent === item.match![2],
-                        );
-                        match?.scrollIntoView({ behavior: "smooth" });
-                      }}
-                    >
-                      {item.match![2]}
-                    </button>
-                  ))
-                ) : (
-                  <p>Add a heading to start an outline.</p>
-                )}
-              </aside>
+            {showOutline && current && !isImage(current.path) && (
+              <DocumentOutline
+                path={current.path}
+                text={current.text}
+                mode={current.mode}
+                onClose={() => setShowOutline(false)}
+                onNavigate={(item) => {
+                  void openFile(current.path, undefined, {
+                    range: { from: item.from, to: item.from },
+                  });
+                }}
+              />
             )}
           </div>
           {settings.terminalVisible && !settings.focusMode && (
@@ -1908,7 +3286,9 @@ export default function App() {
                     className={terminalActive === terminal.id ? "active" : ""}
                   >
                     <button onClick={() => setTerminalActive(terminal.id)}>
-                      {terminal.name} <span>{index + 1}</span>
+                      {terminal.name}
+                      {terminal.cwd ? ` · ${terminal.cwd}` : ""}{" "}
+                      <span>{index + 1}</span>
                     </button>
                     <button
                       aria-label={`Close terminal ${index + 1}`}
@@ -1932,7 +3312,7 @@ export default function App() {
               <button
                 className="icon-button small"
                 aria-label="New terminal"
-                title="New terminal"
+                data-tooltip="New terminal"
                 disabled={!root}
                 onClick={() => void addTerminal()}
               >
@@ -2003,7 +3383,7 @@ export default function App() {
           </>
         )}
         <button
-          title="Autosave preferences"
+          data-tooltip="Autosave preferences"
           onClick={() => setShowSettings(true)}
         >
           <span
@@ -2048,48 +3428,6 @@ export default function App() {
           aria-label="Filesystem operation in progress"
         />
       )}
-      {context && (
-        <div
-          className="context-menu"
-          style={{
-            left: Math.min(context.x, window.innerWidth - 230),
-            top: Math.min(context.y, window.innerHeight - 210),
-          }}
-          role="menu"
-        >
-          <button role="menuitem" onClick={() => void moveEntry(context.path)}>
-            <Pencil size={14} />
-            Rename / move<span>F2</span>
-          </button>
-          <button
-            role="menuitem"
-            onClick={() => void duplicateEntry(context.path)}
-          >
-            <Copy size={14} />
-            Duplicate
-          </button>
-          <button
-            role="menuitem"
-            onClick={() => {
-              setSelected(context.path);
-              setContext(null);
-              void createEntry(false);
-            }}
-          >
-            <FilePlus2 size={14} />
-            New document here
-          </button>
-          <hr />
-          <button
-            role="menuitem"
-            className="danger-text"
-            onClick={() => void deleteEntry(context.path)}
-          >
-            <Trash2 size={14} />
-            Move to Trash<span>Del</span>
-          </button>
-        </div>
-      )}
       {palette && (
         <div
           className="modal-scrim palette-scrim"
@@ -2116,7 +3454,7 @@ export default function App() {
                 }
                 placeholder={
                   palette === "files"
-                    ? "Search your workspace…"
+                    ? "Search files… (name:42 or name:42:5)"
                     : "What would you like to do?"
                 }
                 value={query}
@@ -2149,7 +3487,9 @@ export default function App() {
             </div>
             <div className="palette-caption">
               {palette === "files"
-                ? "FILES IN YOUR WORKSPACE"
+                ? paletteBeside.current
+                  ? "CHOOSE A SECOND DOCUMENT"
+                  : "FILES IN YOUR WORKSPACE"
                 : "WORKSPACE COMMANDS"}
             </div>
             <div className="palette-results">
@@ -2157,6 +3497,7 @@ export default function App() {
                 <button
                   key={item.label + item.detail + index}
                   className={paletteIndex === index ? "active" : ""}
+                  data-palette-active={paletteIndex === index}
                   onMouseEnter={() => setPaletteIndex(index)}
                   onClick={() => {
                     setPalette(null);
@@ -2191,6 +3532,33 @@ export default function App() {
             </div>
           </div>
         </div>
+      )}
+      {historyPath && (
+        <HistoryDialog
+          path={historyPath}
+          text={tabs.find((tab) => tab.path === historyPath)?.text || ""}
+          onClose={() => setHistoryPath("")}
+          onError={fail}
+          onRestore={async (text) => {
+            const tab = tabsRef.current.find((tab) => tab.path === historyPath);
+            if (!tab) return;
+            await window.margin.historyCheckpoint(historyPath, tab.text);
+            changeTabs((previous) =>
+              previous.map((entry) =>
+                entry.path === historyPath
+                  ? {
+                      ...entry,
+                      text,
+                      dirty: text !== entry.baseline,
+                      mode: visualProtection(text) ? "source" : entry.mode,
+                    }
+                  : entry,
+              ),
+            );
+            setHistoryPath("");
+            notify("Version restored to the editor. Save to update the file.");
+          }}
+        />
       )}
       {showSettings && (
         <div
@@ -2273,6 +3641,60 @@ export default function App() {
                   </select>
                 </label>
                 <label>
+                  Reading font size
+                  <select
+                    aria-label="Reading font size"
+                    value={settings.readingFontSize}
+                    onChange={(event) =>
+                      void updateSettings({
+                        readingFontSize: Number(event.target.value),
+                      })
+                    }
+                  >
+                    {[14, 15, 16, 17, 18, 20, 22, 24, 28, 32].map((size) => (
+                      <option key={size} value={size}>
+                        {size} px
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label>
+                  Reading line height
+                  <select
+                    aria-label="Reading line height"
+                    value={settings.readingLineHeight}
+                    onChange={(event) =>
+                      void updateSettings({
+                        readingLineHeight: Number(event.target.value),
+                      })
+                    }
+                  >
+                    {[1.3, 1.5, 1.65, 1.85, 2, 2.25, 2.5].map((size) => (
+                      <option key={size} value={size}>
+                        {size}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label>
+                  Reading text width
+                  <select
+                    aria-label="Reading text width"
+                    value={settings.readingWidth}
+                    onChange={(event) =>
+                      void updateSettings({
+                        readingWidth: Number(event.target.value),
+                      })
+                    }
+                  >
+                    {[560, 680, 820, 960, 1100, 1200].map((size) => (
+                      <option key={size} value={size}>
+                        {size} px
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label>
                   Indentation
                   <select
                     aria-label="Indentation"
@@ -2293,6 +3715,61 @@ export default function App() {
               </div>
               <div className="settings-section">
                 <h3>Saving & recovery</h3>
+                <label className="checkbox-setting">
+                  <input
+                    type="checkbox"
+                    aria-label="Keep local version history"
+                    checked={settings.historyEnabled}
+                    onChange={(event) =>
+                      void updateSettings({
+                        historyEnabled: event.target.checked,
+                      })
+                    }
+                  />
+                  Keep local version history
+                </label>
+                <label>
+                  History storage limit
+                  <select
+                    aria-label="History storage limit"
+                    value={settings.historyLimitMB}
+                    onChange={(event) =>
+                      void updateSettings({
+                        historyLimitMB: Number(event.target.value),
+                      })
+                    }
+                  >
+                    {[10, 25, 50, 100, 250, 500, 1000].map((size) => (
+                      <option key={size} value={size}>
+                        {size} MB
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label>
+                  Versions per file
+                  <select
+                    aria-label="Versions per file"
+                    value={settings.historyVersions}
+                    onChange={(event) =>
+                      void updateSettings({
+                        historyVersions: Number(event.target.value),
+                      })
+                    }
+                  >
+                    {[5, 10, 20, 50, 100].map((size) => (
+                      <option key={size} value={size}>
+                        {size}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <p>
+                  Earlier saved text stays in local application data. Limits
+                  apply across workspaces. Lowering a limit removes the oldest
+                  versions; disabling history stops new snapshots and retains
+                  existing versions.
+                </p>
                 <label>
                   Autosave policy
                   <select

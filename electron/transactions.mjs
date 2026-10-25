@@ -28,6 +28,7 @@ export class Transactions {
     return this.blocked;
   }
   async rollback(record) {
+    if (record.moves) return this.rollbackBatch(record);
     const moved = await exists(record.to);
     const original = await exists(record.from);
     if (moved && original)
@@ -50,6 +51,95 @@ export class Transactions {
       );
     if (moved) await fs.rename(record.to, record.from);
   }
+  async moveMany(moves, edits, check, fault) {
+    if (this.blocked.length)
+      throw new Error(
+        "Unresolved recovery journal blocks filesystem mutations.",
+      );
+    await fs.mkdir(this.directory, { recursive: true });
+    const record = {
+      id: randomUUID(),
+      state: "prepared",
+      created: new Date().toISOString(),
+      moves,
+      edits: edits.map((edit) => ({
+        beforePath: edit.beforePath,
+        afterPath: edit.afterPath,
+        before: Buffer.from(edit.before).toString("base64"),
+        beforeHash: hash(edit.before),
+        afterHash: hash(edit.after),
+      })),
+    };
+    const file = path.join(this.directory, record.id + ".json");
+    await writeJSON(file, record);
+    const renamed = [];
+    try {
+      await check();
+      for (const move of moves) {
+        if (await exists(move.to))
+          throw new Error("The destination already exists.");
+        await fs.rename(move.from, move.to);
+        renamed.push(move);
+        if (fault) await fault(move);
+      }
+      for (const edit of edits) {
+        if (hash(await fs.readFile(edit.afterPath)) !== hash(edit.before))
+          throw new Error("A file changed during the batch move.");
+        await atomicWrite(edit.afterPath, edit.after);
+      }
+      record.state = "committed";
+      await writeJSON(file, record);
+      return { referencesUpdated: edits.length };
+    } catch (error) {
+      try {
+        if (renamed.length)
+          await this.rollbackBatch({ ...record, moves: renamed });
+        record.state = "rolled-back";
+        await writeJSON(file, record);
+      } catch (rollbackError) {
+        this.blocked.push({ file, message: rollbackError.message });
+        throw new Error(
+          `Batch recovery paused. Originals are in ${file}: ${rollbackError.message}`,
+        );
+      }
+      throw error;
+    }
+  }
+  async rollbackBatch(record) {
+    const locations = [];
+    for (const move of record.moves) {
+      const source = await exists(move.from),
+        destination = await exists(move.to);
+      if (source === destination)
+        throw new Error(
+          "A batch move location is ambiguous. Preserve both locations and inspect its journal.",
+        );
+      locations.push({ ...move, moved: destination });
+    }
+    const location = (edit) => {
+      const move = locations.find(
+        (move) =>
+          edit.beforePath === move.from ||
+          edit.beforePath.startsWith(move.from + path.sep),
+      );
+      return move?.moved
+        ? move.to + edit.beforePath.slice(move.from.length)
+        : edit.beforePath;
+    };
+    for (const edit of record.edits) {
+      if (
+        ![edit.beforeHash, edit.afterHash].includes(
+          hash(await fs.readFile(location(edit))),
+        )
+      )
+        throw new Error("External changes prevent automatic batch recovery.");
+    }
+    for (const edit of record.edits)
+      await atomicWrite(location(edit), Buffer.from(edit.before, "base64"));
+    for (const move of [...locations].reverse())
+      if (move.moved) await fs.rename(move.to, move.from);
+  }
+
   async move(from, to, edits, check, fault) {
     if (this.blocked.length)
       throw new Error(

@@ -2,6 +2,18 @@ import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 export default defineConfig(({ command }) => ({
   base: "./",
+  optimizeDeps: {
+    include: [
+      "@tiptap/extension-paragraph",
+      "@tiptap/pm/state",
+      "@tiptap/pm/history",
+      "@tiptap/core",
+      "@tiptap/pm/view",
+      "unified",
+      "remark-parse",
+      "remark-gfm",
+    ],
+  },
   plugins: [
     react(),
     {

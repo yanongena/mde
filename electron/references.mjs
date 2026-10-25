@@ -121,9 +121,20 @@ export function rewriteReferences(
   from,
   to,
 ) {
+  return rewriteReferencesMany(markdown, oldDocument, newDocument, [
+    { from, to },
+  ]);
+}
+export function rewriteReferencesMany(
+  markdown,
+  oldDocument,
+  newDocument,
+  moves,
+) {
   let result = markdown;
   for (const ref of references(markdown, oldDocument).reverse()) {
-    const target = remap(ref.target, from, to);
+    const move = moves.find((move) => isWithin(ref.target, move.from));
+    const target = move ? remap(ref.target, move.from, move.to) : ref.target;
     if (
       target === ref.target &&
       path.posix.dirname(oldDocument) === path.posix.dirname(newDocument)

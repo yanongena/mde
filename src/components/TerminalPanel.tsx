@@ -4,6 +4,8 @@ import { FitAddon } from "@xterm/addon-fit";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import "@xterm/xterm/css/xterm.css";
 import type { TerminalInfo, Settings } from "../types";
+import { useContextMenu } from "./ContextMenu";
+import { terminalLinkAt } from "../lib/terminal-links";
 
 export function TerminalView({
   info,
@@ -16,6 +18,7 @@ export function TerminalView({
   theme: Settings["theme"];
   onError(message: string): void;
 }) {
+  const { openMenu } = useContextMenu();
   const host = useRef<HTMLDivElement>(null),
     terminal = useRef<Terminal | null>(null);
   const fit = useRef<FitAddon | null>(null),
@@ -30,6 +33,7 @@ export function TerminalView({
       fontFamily: "'Cascadia Code', 'SFMono-Regular', Consolas, monospace",
       scrollback: 10000,
       allowProposedApi: false,
+      rightClickSelectsWord: false,
     });
     const fitAddon = new FitAddon();
     term.loadAddon(fitAddon);
@@ -123,6 +127,70 @@ export function TerminalView({
       ref={host}
       className={"terminal-view" + (active ? " active" : "")}
       data-testid="terminal-view"
+      onContextMenu={(event) => {
+        const term = terminal.current;
+        if (!term) return;
+        event.preventDefault();
+        const selection = term.getSelection();
+        const screen = host.current
+          ?.querySelector(".xterm-screen")
+          ?.getBoundingClientRect();
+        const column = screen
+          ? Math.floor(
+              (event.clientX - screen.left) / (screen.width / term.cols),
+            )
+          : -1;
+        const row = screen
+          ? Math.floor(
+              (event.clientY - screen.top) / (screen.height / term.rows),
+            )
+          : -1;
+        const url =
+          event.button === 2
+            ? row >= 0 && row < term.rows && column >= 0 && column < term.cols
+              ? terminalLinkAt(term, term.buffer.active.viewportY + row, column)
+              : null
+            : /^https?:\/\/\S+$/i.test(selection)
+              ? selection
+              : null;
+        openMenu({
+          x: event.clientX,
+          y: event.clientY,
+          restoreFocus: () => {
+            if (terminal.current === term) term.focus();
+          },
+          items: [
+            {
+              label: "Copy selection",
+              disabled: !selection,
+              run: () => window.margin.copyText(selection),
+            },
+            {
+              label: "Paste",
+              disabled: info.exited,
+              run: async () => {
+                const text = await window.margin.readClipboardText();
+                if (terminal.current === term) term.paste(text);
+              },
+            },
+            { label: "Select all", run: () => term.selectAll() },
+            { label: "Clear view", run: () => term.clear() },
+            ...(url
+              ? [
+                  null,
+                  {
+                    label: "Open link",
+                    run: () => window.margin.external(url),
+                  },
+                  {
+                    label: "Copy link address",
+                    run: () => window.margin.copyText(url),
+                  },
+                ]
+              : []),
+          ],
+        });
+      }}
     />
   );
 }

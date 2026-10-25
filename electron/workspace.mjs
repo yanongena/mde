@@ -1,3 +1,4 @@
+import { selectionRoots } from "./selection.mjs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
@@ -5,6 +6,7 @@ import { hash, exists, atomicWrite } from "./storage.mjs";
 import {
   references,
   rewriteReferences,
+  rewriteReferencesMany,
   remap,
   isWithin,
   slash,
@@ -143,8 +145,58 @@ export class Workspace {
       if (hash(current) !== expected)
         return { conflict: true, disk: await this.read(name) };
       const data = Buffer.from(text, "utf8");
+      if (this.history && hash(current) !== hash(data))
+        await this.history.capture(
+          this.root,
+          slash(name),
+          current.toString("utf8"),
+        );
+      if (hash(await fs.readFile(file)) !== expected)
+        return { conflict: true, disk: await this.read(name) };
       await atomicWrite(file, data);
       return { conflict: false, revision: hash(data) };
+    });
+  }
+  async saveCopy(from, name, text) {
+    return this.mutate(async () => {
+      this.validateName(name);
+      await this.resolve(from, true);
+      if (
+        typeof text !== "string" ||
+        Buffer.byteLength(text, "utf8") > 10 * 1024 * 1024
+      )
+        throw new Error("Text copies must be UTF-8 files up to 10 MB.");
+      const destination = await this.resolve(name, true);
+      await this.resolve(
+        path.posix.dirname(slash(name)) === "."
+          ? ""
+          : path.posix.dirname(slash(name)),
+      );
+      const content =
+        isMarkdown(from) && isMarkdown(name)
+          ? rewriteReferences(
+              text,
+              slash(from),
+              slash(name),
+              "__no_move__",
+              "__no_move__",
+            )
+          : text;
+      const handle = await fs.open(destination, "wx");
+      try {
+        await handle.writeFile(content, "utf8");
+        await handle.sync();
+      } catch (error) {
+        await handle.close();
+        await fs.unlink(destination).catch(() => {});
+        throw error;
+      }
+      await handle.close();
+      return {
+        path: slash(name),
+        text: content,
+        revision: hash(Buffer.from(content, "utf8")),
+      };
     });
   }
   async create(name, directory = false) {
@@ -240,6 +292,69 @@ export class Workspace {
       );
     });
   }
+  async moveSelection(paths, directory, fault) {
+    return this.mutate(async () => {
+      const roots = selectionRoots(paths);
+      const parent = await this.resolve(directory);
+      if (!(await fs.stat(parent)).isDirectory())
+        throw new Error("Choose an existing destination folder.");
+      const moves = [];
+      const destinations = new Set();
+      for (const from of roots) {
+        const to = directory
+          ? directory + "/" + path.posix.basename(from)
+          : path.posix.basename(from);
+        if (from === to) continue;
+        if (roots.some((root) => isWithin(to, root)))
+          throw new Error("Cannot move a selection inside itself.");
+        this.validateName(to);
+        const source = await this.resolve(from),
+          destination = await this.resolve(to, true);
+        // Conservative folding also catches collisions on default macOS volumes.
+        const key = to.toLowerCase();
+        if (destinations.has(key) || (await exists(destination)))
+          throw new Error(
+            "A destination already exists or selected items have the same name.",
+          );
+        destinations.add(key);
+        moves.push({ from, to, source, destination });
+      }
+      if (!moves.length) return { moves: [], referencesUpdated: 0 };
+      const map = (name) => {
+        const move = moves.find((move) => isWithin(name, move.from));
+        return move ? move.to + name.slice(move.from.length) : name;
+      };
+      const snapshots = [],
+        edits = [];
+      for (const entry of await this.tree()) {
+        if (entry.directory || !isMarkdown(entry.path)) continue;
+        const doc = await this.read(entry.path);
+        snapshots.push(doc);
+        const newName = map(doc.path);
+        const text = rewriteReferencesMany(doc.text, doc.path, newName, moves);
+        if (text !== doc.text)
+          edits.push({
+            beforePath: await this.resolve(doc.path),
+            afterPath: path.join(this.root, newName),
+            before: doc.text,
+            after: text,
+          });
+      }
+      const result = await this.transactions.moveMany(
+        moves.map((move) => ({ from: move.source, to: move.destination })),
+        edits,
+        async () => {
+          for (const snapshot of snapshots)
+            if ((await this.read(snapshot.path)).revision !== snapshot.revision)
+              throw new Error(
+                "A file changed while indexing references. Retry the move.",
+              );
+        },
+        fault,
+      );
+      return { ...result, moves: moves.map(({ from, to }) => ({ from, to })) };
+    });
+  }
   async duplicate(from, to) {
     from = slash(from);
     to = slash(to);
@@ -327,6 +442,27 @@ export class Workspace {
         )
           incoming.push(entry.path);
       }
+    return incoming;
+  }
+  async incomingSelection(paths) {
+    const roots = selectionRoots(paths);
+    for (const name of roots) await this.resolve(name);
+    const incoming = [];
+    for (const entry of await this.tree()) {
+      if (
+        entry.directory ||
+        !isMarkdown(entry.path) ||
+        roots.some((root) => isWithin(entry.path, root))
+      )
+        continue;
+      const doc = await this.read(entry.path);
+      if (
+        references(doc.text, doc.path).some((ref) =>
+          roots.some((root) => isWithin(ref.target, root)),
+        )
+      )
+        incoming.push(entry.path);
+    }
     return incoming;
   }
   async attachment(documentPath, bytes, filename, settings) {

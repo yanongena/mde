@@ -14,6 +14,53 @@ export interface Tab extends Document {
   mode: "visual" | "source";
   conflict?: Document | "deleted";
   version: number;
+  position?: EditorPosition;
+  suppressAutoFormat?: boolean;
+  pinned?: boolean;
+}
+export interface EditorPosition {
+  mode: "visual" | "source";
+  anchor: number;
+  head: number;
+  sourceAnchor: number;
+  sourceHead: number;
+  scrollTop: number;
+  topSource: number;
+  topOffset: number;
+  scrollRatio: number;
+  signature: string;
+}
+export interface ClosedTab {
+  path: string;
+  mode: Tab["mode"];
+  position?: EditorPosition;
+  index: number;
+  pinned?: boolean;
+}
+export interface SearchOptions {
+  query: string;
+  include: string;
+  exclude: string;
+  caseSensitive: boolean;
+  wholeWord: boolean;
+}
+export interface SearchMatch {
+  path: string;
+  from: number;
+  to: number;
+  line: number;
+  column: number;
+  preview: string;
+  matchStart: number;
+  matchEnd: number;
+  value: string;
+}
+export interface SearchResults {
+  matches: SearchMatch[];
+  files: number;
+  skipped: number;
+  truncated: boolean;
+  cancelled: boolean;
 }
 export interface Settings {
   theme: "light" | "dark";
@@ -23,6 +70,12 @@ export interface Settings {
   attachmentFolder: string;
   ignored: string[];
   fontSize: number;
+  readingFontSize: number;
+  readingLineHeight: number;
+  readingWidth: number;
+  historyEnabled: boolean;
+  historyLimitMB: number;
+  historyVersions: number;
   indentSize: number;
   formatOnOpen: boolean;
   sidebarWidth: number;
@@ -35,6 +88,9 @@ export interface SavedSession {
   tabs: Tab[];
   active: string;
   expanded: string[];
+  closedTabs?: ClosedTab[];
+  recentFiles?: string[];
+  split?: { left: string; right: string } | null;
 }
 export interface OpenedWorkspace {
   root: string;
@@ -49,8 +105,32 @@ export interface TerminalInfo {
   id: string;
   name: string;
   exited?: boolean;
+  cwd?: string;
 }
 export interface MarginAPI {
+  search(
+    request: SearchOptions & {
+      id: string;
+      overlays: { path: string; text: string }[];
+    },
+  ): Promise<SearchResults>;
+  cancelSearch(id: string): Promise<void>;
+  edit(
+    command:
+      | "undo"
+      | "redo"
+      | "cut"
+      | "copy"
+      | "paste"
+      | "pasteAndMatchStyle"
+      | "selectAll",
+  ): Promise<void>;
+  copyText(text: string, html?: string): Promise<void>;
+  readClipboardText(): Promise<string>;
+  copyPath(path: string): Promise<void>;
+  reveal(path: string): Promise<void>;
+  copyImage(pixels: number[]): Promise<void>;
+  imageBytes(source: string): Promise<number[]>;
   bootstrap(): Promise<{
     settings: Settings;
     recent: string[];
@@ -70,8 +150,32 @@ export interface MarginAPI {
     revision: string,
   ): Promise<{ conflict: boolean; disk?: Document; revision?: string }>;
   create(path: string, directory: boolean): Promise<string>;
-  move(from: string, to: string): Promise<{ referencesUpdated: number }>;
+  saveCopy(from: string, path: string, text: string): Promise<Document>;
+  moveSelection(
+    paths: string[],
+    directory: string,
+  ): Promise<{
+    moves: { from: string; to: string }[];
+    referencesUpdated: number;
+    historyWarning?: string;
+  }>;
+  trashSelection(
+    paths: string[],
+  ): Promise<{
+    trashed: string[];
+    failed: { path: string; message: string }[];
+  }>;
+  historyList(
+    path: string,
+  ): Promise<{ id: string; created: string; bytes: number; reason: string }[]>;
+  historyRead(path: string, id: string): Promise<string>;
+  historyCheckpoint(path: string, text: string): Promise<void>;
+  move(
+    from: string,
+    to: string,
+  ): Promise<{ referencesUpdated: number; historyWarning?: string }>;
   duplicate(from: string, to: string): Promise<string>;
+  incomingSelection(paths: string[]): Promise<string[]>;
   incoming(path: string): Promise<string[]>;
   trash(path: string): Promise<void>;
   attachment(
@@ -83,12 +187,15 @@ export interface MarginAPI {
   clipboardImage(path: string): Promise<Attachment | null>;
   settings(settings: Partial<Settings>): Promise<Settings>;
   persist(
-    session: Pick<SavedSession, "active" | "expanded" | "tabs">,
+    session: Pick<
+      SavedSession,
+      "active" | "expanded" | "tabs" | "closedTabs" | "recentFiles" | "split"
+    >,
   ): Promise<void>;
   openRecovery(): Promise<void>;
   closeConfirmed(): Promise<void>;
   external(url: string): Promise<void>;
-  terminalCreate(shell: string): Promise<TerminalInfo>;
+  terminalCreate(shell: string, directory?: string): Promise<TerminalInfo>;
   terminalWrite(id: string, data: string): Promise<void>;
   terminalResize(id: string, cols: number, rows: number): Promise<void>;
   terminalClose(id: string): Promise<void>;

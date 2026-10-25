@@ -9,10 +9,13 @@ const file = (name) => path.join(root, name);
 async function disk(name) {
   return fs.readFile(file(name), "utf8");
 }
+async function diskWhenPresent(name) {
+  try { return await disk(name); } catch(error) { if(error.code==='ENOENT')return undefined;throw error; }
+}
 async function open(name) {
   await page.getByRole("treeitem", { name, exact: true }).click();
   await expect(page.locator(".editor-tab.active")).toHaveAttribute(
-    "title",
+    "data-tooltip",
     name,
   );
 }
@@ -346,7 +349,7 @@ test("all requested code languages highlight, edit/save, search/replace, diagnos
   await page.getByLabel("Workspace-relative path").fill("src/recovered.py");
   await page.getByRole("button", { name: "Save copy", exact: true }).click();
   await expect
-    .poll(() => disk("src/recovered.py"))
+    .poll(() => diskWhenPresent("src/recovered.py"))
     .toBe("# Unsaved editor changes\n");
   expect(await disk("src/example.py")).toBe("# New disk version\n");
   expect(errors).toEqual([]);
@@ -373,7 +376,7 @@ test("PowerShell PTYs, multiple interactive terminals, layout and session restor
     .poll(() => page.locator(".terminal-view.active .xterm-rows").innerText())
     .toContain("MARGIN_PTY_42");
   await expect
-    .poll(() => disk("terminal-created.txt"))
+    .poll(() => diskWhenPresent("terminal-created.txt"))
     .toContain("real shell output");
   // Read terminal buffers from the real main-process service through the supported bridge.
   await expect
@@ -470,7 +473,7 @@ test("autosave, quick open, dirty drafts across forced restart and unsupported M
   await page.getByLabel("Autosave policy").selectOption("afterDelay");
   await page.getByRole("button", { name: "Close preferences" }).click();
   await sourceFill("# Autosaved\n");
-  await expect.poll(() => disk("notes/welcome.md")).toBe("# Autosaved\n");
+  await expect.poll(() => diskWhenPresent("notes/welcome.md")).toBe("# Autosaved\n");
   await page.keyboard.press(shortcut + "+p");
   await page.getByLabel("Search files", { exact: true }).fill("example.php");
   await page.keyboard.press("Enter");
@@ -545,7 +548,7 @@ test("heading levels, inline marks, nested lists, blockquotes, links and rich-te
   await page.keyboard.press("Enter");
   await page.keyboard.press("Enter");
   await page.keyboard.insertText("Related note");
-  await page.keyboard.press("Shift+Home");
+  await page.keyboard.press(process.platform === "darwin" ? "Meta+Shift+ArrowLeft" : "Shift+Home");
   await page
     .getByRole("button", { name: "Edit link (Ctrl+K)", exact: true })
     .click();
@@ -725,7 +728,11 @@ test("native close prompts protect edits and stop the shell process tree", async
       return pid;
     })
     .toBeGreaterThan(0);
-  const closed = app.waitForEvent("close");
+  // macOS keeps the application running after its last window closes.
+  const closed =
+    process.platform === "darwin"
+      ? page.waitForEvent("close")
+      : app.waitForEvent("close");
   await app.evaluate(({ BrowserWindow }) =>
     BrowserWindow.getAllWindows()[0].close(),
   );
@@ -733,8 +740,12 @@ test("native close prompts protect edits and stop the shell process tree", async
     .getByRole("button", { name: "Keep drafts & close", exact: true })
     .click();
   await closed;
-  await app.close().catch(() => {});
-  app = null;
+  if (process.platform === "darwin")
+    expect(
+      await app.evaluate(
+        ({ BrowserWindow }) => BrowserWindow.getAllWindows().length,
+      ),
+    ).toBe(0);
   await expect
     .poll(() => {
       try {
@@ -745,6 +756,10 @@ test("native close prompts protect edits and stop the shell process tree", async
       }
     })
     .toBe(false);
+  if (process.platform === "darwin")
+    await app.evaluate(({ app }) => app.exit());
+  await app.close().catch(() => {});
+  app = null;
   expect(await disk("src/example.py")).toContain("def greet");
   await launch();
   await expect(page.locator(".editor-pane.active .cm-content")).toContainText(
@@ -805,6 +820,76 @@ test("renderer isolation, path confinement, JSON diagnostics and literal HTML co
   expect(errors).toEqual([]);
 });
 
+test("compact editor keeps actions in tabs and tooltips appear promptly", async () => {
+  await open("src/example.html");
+  await expect(
+    page.locator(".breadcrumbs, .document-header, .source-label"),
+  ).toHaveCount(0);
+  await expect(page.locator(".tabs-bar .save-state")).toContainText("Saved");
+  await expect(
+    page
+      .locator(".tabs-bar")
+      .getByRole("button", { name: "Save file", exact: true }),
+  ).toBeVisible();
+  const tabs = await page.locator(".tabs-bar").boundingBox();
+  const editor = await page.locator(".editor-pane.active").boundingBox();
+  expect(Math.abs(editor.y - (tabs.y + tabs.height))).toBeLessThan(1);
+
+  const newFolder = page.getByRole("button", {
+    name: "New folder",
+    exact: true,
+  });
+  await newFolder.locator("svg").hover();
+  const tooltip = page.getByRole("tooltip");
+  await expect(tooltip).toHaveText("New folder", { timeout: 800 });
+  await expect(newFolder).toHaveAttribute(
+    "aria-describedby",
+    await tooltip.getAttribute("id"),
+  );
+  await tooltip.hover();
+  await expect(tooltip).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(tooltip).toHaveCount(0);
+  await expect(newFolder).not.toHaveAttribute("aria-describedby");
+
+  await page.mouse.move(0, 0);
+  await page.locator(".editor-tab.active > span").first().hover();
+  await expect(tooltip).toHaveText("src/example.html", { timeout: 800 });
+  const bounds = await tooltip.boundingBox();
+  const viewport = await page.evaluate(() => ({
+    width: innerWidth,
+    height: innerHeight,
+  }));
+  expect(bounds.x).toBeGreaterThanOrEqual(8);
+  expect(bounds.x + bounds.width).toBeLessThanOrEqual(viewport.width - 8);
+  expect(bounds.y + bounds.height).toBeLessThanOrEqual(viewport.height - 8);
+
+  await page.mouse.move(0, 0);
+  await newFolder.focus();
+  await expect(tooltip).toHaveText("New folder", { timeout: 800 });
+  await page.keyboard.press("Tab");
+  await expect(tooltip).toHaveCount(0);
+  await page.getByRole("button", { name: "Toggle theme", exact: true }).click();
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
+  await page.screenshot({ path: "test-results/compact-editor.png" });
+  await open("notes/welcome.md");
+  await page
+    .locator(".tabs-bar")
+    .getByRole("button", { name: "Markdown source mode" })
+    .click();
+  await expect(page.locator(".editor-pane.active .cm-content")).toContainText(
+    "# A quieter workspace",
+  );
+  await page
+    .locator(".tabs-bar")
+    .getByRole("button", { name: "Visual mode", exact: true })
+    .click();
+  await expect(page.locator(".editor-pane.active h1")).toHaveText(
+    "A quieter workspace",
+  );
+  expect(errors).toEqual([]);
+});
+
 test("code auto-format defaults on, respects indentation and is a single undoable edit", async () => {
   const input =
     "<!doctype html><html><head><style>body{margin:0;padding:10px}</style></head><body><h1>Hello</h1><p>Readable code.</p></body></html>";
@@ -824,7 +909,10 @@ test("code auto-format defaults on, respects indentation and is a single undoabl
     page.locator(".editor-pane.active .code-format-toolbar"),
   ).toContainText("Automatically formatted");
   const firstLine = await content.locator(".cm-line").first().boundingBox();
-  const firstNumber = await page.locator(".editor-pane.active .cm-lineNumbers .cm-gutterElement").filter({ hasText: /^1$/ }).boundingBox();
+  const firstNumber = await page
+    .locator(".editor-pane.active .cm-lineNumbers .cm-gutterElement")
+    .filter({ hasText: /^1$/ })
+    .boundingBox();
   expect(Math.abs(firstLine.y - firstNumber.y)).toBeLessThan(1);
   expect(
     await content
@@ -897,6 +985,10 @@ test("formatting preference persists, manual command/shortcut work, and invalid 
     .fill("Format document");
   await page.keyboard.press("Enter");
   await expect(content).toContainText("function example() {");
+  await expect(
+    page.getByRole("dialog", { name: "Command palette", exact: true }),
+  ).toHaveCount(0);
+  await content.click();
   await save();
   expect(await disk("format.js")).toContain("\n  const data");
   await fs.writeFile(file("invalid.js"), "function broken( {");
@@ -964,5 +1056,2513 @@ test("browser worker formats JSON, YAML, PHP and XML without desktop privileges"
     await save();
     expect(await disk(name)).not.toBe(input);
   }
+  expect(errors).toEqual([]);
+});
+
+test("document outline navigates HTML and mixed PHP, updates unsaved edits and switches files", async () => {
+  await page.getByRole("button", { name: "Preferences", exact: true }).click();
+  await page
+    .getByLabel("Automatically format code on open", { exact: true })
+    .uncheck();
+  await page.getByRole("button", { name: "Close preferences" }).click();
+  const html =
+    '<main id="app">\n  <h1>Hello <em>world</em></h1>\n  <section class="hero">Content</section>\n</main>\n';
+  const php =
+    '<main>\n<?php\n// function fake() {}\nclass Controller {\n  public function render() {}\n}\n?>\n<section id="content"><h2>Welcome</h2></section>\n</main>\n';
+  await fs.writeFile(file("outline.html"), html);
+  await fs.writeFile(file("outline.php"), php);
+  await expect(
+    page.getByRole("treeitem", { name: "outline.html", exact: true }),
+  ).toBeVisible();
+  await open("outline.html");
+  await page.getByRole("button", { name: "Show outline", exact: true }).click();
+  const outline = page.getByRole("complementary", { name: "Document outline" });
+  await expect(
+    outline.getByRole("button", { name: "main#app, line 1", exact: true }),
+  ).toBeVisible();
+  await expect(
+    outline.getByRole("button", {
+      name: "h1 — Hello world, line 2",
+      exact: true,
+    }),
+  ).toBeVisible();
+  await outline
+    .getByRole("button", { name: "section.hero, line 3", exact: true })
+    .click();
+  await page.keyboard.insertText("<!-- target -->");
+  await save();
+  expect(await disk("outline.html")).toBe(
+    html.replace("<section", "<!-- target --><section"),
+  );
+  await page.keyboard.press(shortcut + "+z");
+  await save();
+  expect(await disk("outline.html")).toBe(html);
+  await sourceFill(html.replace('class="hero"', 'id="updated"'));
+  await expect(
+    outline.getByRole("button", {
+      name: "section#updated, line 3",
+      exact: true,
+    }),
+  ).toBeVisible();
+  await expect(
+    outline.getByRole("button", { name: /section\.hero/ }),
+  ).toHaveCount(0);
+  expect(await disk("outline.html")).toBe(html);
+  await save();
+  await open("outline.php");
+  await expect(
+    outline.getByRole("button", { name: "render(), line 5", exact: true }),
+  ).toBeVisible();
+  await expect(
+    outline.getByRole("button", { name: /section#updated|fake/ }),
+  ).toHaveCount(0);
+  await expect(
+    outline.getByRole("button", {
+      name: "section#content, line 8",
+      exact: true,
+    }),
+  ).toBeVisible();
+  await outline
+    .getByRole("button", { name: "render(), line 5", exact: true })
+    .click();
+  await page.keyboard.insertText("/* target */");
+  await save();
+  expect(await disk("outline.php")).toBe(
+    php.replace("public function", "/* target */public function"),
+  );
+  await page.keyboard.press(shortcut + "+z");
+  await save();
+  await page.screenshot({ path: "test-results/code-outline.png" });
+  await page
+    .getByRole("button", { name: "Close outline", exact: true })
+    .click();
+  await expect(outline).toHaveCount(0);
+  await expect(
+    page.getByRole("button", { name: "Show outline", exact: true }),
+  ).toHaveAttribute("aria-expanded", "false");
+  expect(errors).toEqual([]);
+});
+
+test("document outline covers code languages, Markdown navigation and unsupported files", async () => {
+  const fixtures = [
+    [
+      "outline.js",
+      "export class Client { run() {} }\nconst load = () => {};\n",
+      "load(), line 4",
+    ],
+    [
+      "outline.ts",
+      "interface Client { run(): void; }\ntype ID = string;\n",
+      "ID",
+    ],
+    ["outline.css", "@media screen { .hero { color:red; } }", ".hero"],
+    [
+      "outline.py",
+      "class Client:\n    def run(self):\n        pass\n",
+      "run()",
+    ],
+    ["outline.xml", '<root><item id="first" /></root>', "item#first"],
+    [
+      "outline.vue",
+      '<template><main id="vue" /></template><script setup>function load() {}</script>',
+      "main#vue",
+    ],
+    ["outline.json", '{"key": true}', null],
+  ];
+  // Default-on formatting changes line positions; labels must track the actual buffer.
+  await page.getByRole("button", { name: "Show outline", exact: true }).click();
+  const outline = page.getByRole("complementary", { name: "Document outline" });
+  for (const [name, text, label] of fixtures) {
+    await fs.writeFile(file(name), text);
+    await expect(
+      page.getByRole("treeitem", { name, exact: true }),
+    ).toBeVisible();
+    await open(name);
+    if (label)
+      await expect(
+        outline.getByRole("button", {
+          name: new RegExp(label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")),
+        }),
+      ).toBeVisible();
+    else
+      await expect(outline).toContainText(
+        "No document outline is available for this file type.",
+      );
+  }
+  await fs.writeFile(
+    file("outline.md"),
+    "# Same\n\nFirst\n\n" +
+      "Paragraph\n\n".repeat(80) +
+      "## Same\n\nSecond\n\n```md\n# Fake\n```\n",
+  );
+  await expect(
+    page.getByRole("treeitem", { name: "outline.md", exact: true }),
+  ).toBeVisible();
+  await open("outline.md");
+  await expect(outline.getByRole("button", { name: /Same, line/ })).toHaveCount(
+    2,
+  );
+  await expect(outline.getByRole("button", { name: /Fake/ })).toHaveCount(0);
+  await outline
+    .getByRole("button", { name: /Same, line/ })
+    .nth(1)
+    .click();
+  await expect
+    .poll(async () =>
+      page.locator(".editor-pane.active h2").evaluate((node) => {
+        const rect = node.getBoundingClientRect();
+        return rect.top >= 0 && rect.bottom <= window.innerHeight;
+      }),
+    )
+    .toBe(true);
+  await page
+    .getByRole("button", { name: "Markdown source mode", exact: true })
+    .click();
+  await outline
+    .getByRole("button", { name: /Same, line/ })
+    .nth(1)
+    .click();
+  await page.keyboard.insertText("<!-- target -->");
+  await save();
+  expect(await disk("outline.md")).toContain("<!-- target -->## Same");
+  expect(errors).toEqual([]);
+});
+
+test("image preview wheel zoom stays anchored, supports dragging and never edits the image", async () => {
+  const { default: sharp } = await import("sharp");
+  const original = await sharp({
+    create: { width: 1600, height: 1000, channels: 3, background: "#598bae" },
+  })
+    .png()
+    .toBuffer();
+  await fs.writeFile(file("zoom.png"), original);
+  await expect(
+    page.getByRole("treeitem", { name: "zoom.png", exact: true }),
+  ).toBeVisible();
+  await open("zoom.png");
+  const viewport = page.getByRole("region", { name: "Image viewport" });
+  const image = viewport.getByRole("img");
+  await expect(image).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Zoom in", exact: true }),
+  ).toBeEnabled();
+  const bounds = await viewport.boundingBox();
+  const before = await image.boundingBox();
+  const pointer = {
+    x: bounds.x + bounds.width * 0.4,
+    y: bounds.y + bounds.height * 0.55,
+  };
+  const sourcePoint = {
+    x: (pointer.x - before.x) / before.width,
+    y: (pointer.y - before.y) / before.height,
+  };
+  await page.mouse.move(pointer.x, pointer.y);
+  await page.mouse.wheel(0, -120);
+  await expect
+    .poll(async () => (await image.boundingBox()).width)
+    .toBeGreaterThan(before.width * 1.2);
+  const after = await image.boundingBox();
+  expect(
+    Math.abs(after.x + sourcePoint.x * after.width - pointer.x),
+  ).toBeLessThan(1);
+  expect(
+    Math.abs(after.y + sourcePoint.y * after.height - pointer.y),
+  ).toBeLessThan(1);
+  expect(
+    await app.evaluate(({ BrowserWindow }) =>
+      BrowserWindow.getAllWindows()[0].webContents.getZoomFactor(),
+    ),
+  ).toBe(1);
+  await page.mouse.wheel(0, 120);
+  await expect
+    .poll(async () =>
+      Math.abs((await image.boundingBox()).width - before.width),
+    )
+    .toBeLessThan(1);
+  await page.mouse.down();
+  await page.mouse.move(pointer.x + 90, pointer.y + 50, { steps: 5 });
+  await page.mouse.up();
+  const panned = await image.boundingBox();
+  expect(Math.abs(panned.x - before.x - 90)).toBeLessThan(1);
+  expect(Math.abs(panned.y - before.y - 50)).toBeLessThan(1);
+  await viewport.dblclick();
+  await expect
+    .poll(async () => Math.abs((await image.boundingBox()).x - before.x))
+    .toBeLessThan(1);
+  await expect
+    .poll(async () => Math.abs((await image.boundingBox()).y - before.y))
+    .toBeLessThan(1);
+  await viewport.focus();
+  await page.keyboard.press("+");
+  await expect
+    .poll(async () => (await image.boundingBox()).width)
+    .toBeGreaterThan(before.width);
+  await page.keyboard.press("0");
+  await expect
+    .poll(async () =>
+      Math.abs((await image.boundingBox()).width - before.width),
+    )
+    .toBeLessThan(1);
+  expect(await fs.readFile(file("zoom.png"))).toEqual(original);
+  expect(errors).toEqual([]);
+});
+
+test("image preview zoom limits, fit resize and per-tab state", async () => {
+  const { default: sharp } = await import("sharp");
+  const original = await sharp({
+    create: { width: 1600, height: 1000, channels: 3, background: "#6e9d7a" },
+  })
+    .png()
+    .toBuffer();
+  await fs.writeFile(file("large.png"), original);
+  await sharp({
+    create: { width: 100, height: 60, channels: 3, background: "#c8886a" },
+  })
+    .png()
+    .toFile(file("small.png"));
+  await expect(
+    page.getByRole("treeitem", { name: "large.png", exact: true }),
+  ).toBeVisible();
+  await open("large.png");
+  const viewport = page.locator(".editor-pane.active .image-viewport");
+  const image = viewport.getByRole("img");
+  const fit = page.getByRole("button", {
+    name: "Fit image to window",
+    exact: true,
+  });
+  await expect(fit).toBeEnabled();
+  await page
+    .getByRole("button", { name: "Actual image size", exact: true })
+    .click();
+  await expect.poll(async () => (await image.boundingBox()).width).toBe(1600);
+  await page.getByRole("button", { name: "Zoom in", exact: true }).click();
+  await expect.poll(async () => (await image.boundingBox()).width).toBe(2000);
+  await open("small.png");
+  await expect(
+    page.getByRole("status", { name: "Image zoom", exact: true }),
+  ).toHaveText("100%");
+  await expect.poll(async () => (await image.boundingBox()).width).toBe(100);
+  await open("large.png");
+  await expect.poll(async () => (await image.boundingBox()).width).toBe(2000);
+  const cancelled = await viewport.evaluate((node) => {
+    let cancelled = true;
+    const rect = node.getBoundingClientRect();
+    for (let index = 0; index < 25; index++)
+      cancelled =
+        !node.dispatchEvent(
+          new WheelEvent("wheel", {
+            deltaY: -10000,
+            clientX: rect.x + rect.width / 2,
+            clientY: rect.y + rect.height / 2,
+            cancelable: true,
+          }),
+        ) && cancelled;
+    return cancelled;
+  });
+  expect(cancelled).toBe(true);
+  await expect(
+    page.getByRole("status", { name: "Image zoom", exact: true }),
+  ).toHaveText("1600%");
+  await expect
+    .poll(async () => (await image.boundingBox()).width)
+    .toBe(1600 * 16);
+  await viewport.evaluate((node) => {
+    const rect = node.getBoundingClientRect();
+    for (let index = 0; index < 25; index++)
+      node.dispatchEvent(
+        new WheelEvent("wheel", {
+          deltaY: 10000,
+          deltaMode: 1,
+          clientX: rect.x + rect.width / 2,
+          clientY: rect.y + rect.height / 2,
+          cancelable: true,
+        }),
+      );
+  });
+  await expect.poll(async () => (await image.boundingBox()).width).toBe(80);
+  await fit.click();
+  const initial = await image.boundingBox();
+  await app.evaluate(({ BrowserWindow }) =>
+    BrowserWindow.getAllWindows()[0].setSize(1000, 700),
+  );
+  await expect
+    .poll(async () => (await image.boundingBox()).width)
+    .toBeLessThan(initial.width);
+  const box = await viewport.boundingBox();
+  const resized = await image.boundingBox();
+  expect(resized.x).toBeGreaterThanOrEqual(box.x);
+  expect(resized.y).toBeGreaterThanOrEqual(box.y);
+  expect(resized.x + resized.width).toBeLessThanOrEqual(box.x + box.width);
+  expect(resized.y + resized.height).toBeLessThanOrEqual(box.y + box.height);
+  await page.getByRole("button", { name: "Zoom in", exact: true }).click();
+  await page.screenshot({ path: "test-results/image-zoom.png" });
+  expect(await fs.readFile(file("large.png"))).toEqual(original);
+  expect(errors).toEqual([]);
+});
+
+// Context menu workflows exercise the real Electron clipboard and editor history.
+async function menuAction(name) {
+  await page.getByRole("menuitem", { name, exact: true }).click();
+}
+async function readClipboard() {
+  return app.evaluate(({ clipboard }) => clipboard.readText());
+}
+async function setClipboard(text, html = "") {
+  await app.evaluate(({ clipboard, ClipboardItem }, data) => clipboard.write([new ClipboardItem({
+    "text/plain": new Blob([data.text], { type: "text/plain" }),
+    ...(data.html ? { "text/html": new Blob([data.html], { type: "text/html" }) } : {}),
+  })]), { text, html });
+}
+
+test("context menus preserve visual selections, clipboard, history and input focus", async () => {
+  await open("notes/welcome.md");
+  const editor = page.locator(".editor-pane.active .document-content");
+  await editor.locator("h1").click();
+  await page.keyboard.press(shortcut + "+a");
+  await editor.locator("h1").click({ button: "right" });
+  await expect(page.getByRole("menuitem", { name: "Copy", exact: true })).toBeEnabled();
+  await menuAction("Copy");
+  await expect.poll(readClipboard).toContain("A quieter workspace");
+  await setClipboard("Plain words", "<b>Rich words</b>");
+  await editor.locator("h1").click({ button: "right" });
+  await menuAction("Paste without formatting");
+  await expect(editor).toHaveText("Plain words");
+  await expect(editor.locator("strong")).toHaveCount(0);
+  await editor.click({ button: "right" });
+  await menuAction("Undo");
+  await expect(editor.locator("h1")).toHaveText("A quieter workspace");
+  await editor.locator("h1").click({ button: "right" });
+  await menuAction("Redo");
+  await expect(editor).toHaveText("Plain words");
+
+  await page.keyboard.press(shortcut + "+n");
+  const input = page.getByLabel("Name", { exact: true });
+  await input.fill("Selection.md");
+  await input.selectText();
+  await input.press("Shift+F10");
+  await expect(page.getByRole("menu")).toBeVisible();
+  await page.keyboard.press("End");
+  await expect(page.getByRole("menuitem", { name: "Select all", exact: true })).toBeFocused();
+  await page.keyboard.press("Escape");
+  await expect(input).toBeFocused();
+  await expect(page.getByRole("dialog", { name: "New document", exact: true })).toBeVisible();
+  await input.click({ button: "right" });
+  await menuAction("Copy");
+  await expect.poll(readClipboard).toBe("Selection.md");
+  await setClipboard("Pasted.md");
+  await input.click({ button: "right" });
+  await menuAction("Paste");
+  await expect(input).toHaveValue("Pasted.md");
+  await input.click({ button: "right" });
+  await menuAction("Undo");
+  await expect(input).toHaveValue("Selection.md");
+  await input.click({ button: "right" });
+  await menuAction("Redo");
+  await expect(input).toHaveValue("Pasted.md");
+  await page.getByRole("button", { name: "Cancel", exact: true }).click();
+  expect(errors).toEqual([]);
+});
+
+test("context menus provide source search, replace, comments, formatting and clipboard", async () => {
+  await open("src/example.js");
+  const source = page.locator(".editor-pane.active .cm-content");
+  await source.click();
+  await page.keyboard.press(shortcut + "+a");
+  await source.click({ button: "right" });
+  await menuAction("Find selection");
+  await expect(page.locator('.editor-pane.active input[name="search"]')).toHaveValue(/const greet/);
+  await page.locator(".editor-pane.active .cm-panel button[name=close]").click();
+  await source.click({ button: "right" });
+  await menuAction("Replace");
+  const replacement = page.locator('.editor-pane.active input[name="replace"]');
+  await expect(replacement).toBeFocused();
+  await replacement.fill("replacement");
+  await replacement.selectText();
+  await replacement.press("Shift+F10");
+  await menuAction("Copy");
+  await expect.poll(readClipboard).toBe("replacement");
+  await page.locator(".editor-pane.active .cm-panel button[name=close]").click();
+  await source.click({ button: "right" });
+  await menuAction("Toggle comment");
+  await expect(source).toContainText("//");
+  await source.click({ button: "right" });
+  await menuAction("Undo");
+  await expect(source).not.toContainText("//");
+  await sourceFill("const compact={value:1};");
+  await source.click({ button: "right" });
+  await menuAction("Format document");
+  await expect(source).toContainText("const compact = { value: 1 };");
+  await source.click({ button: "right" });
+  await menuAction("Undo");
+  await expect(source).toHaveText("const compact={value:1};");
+  await source.click();
+  await page.keyboard.press(shortcut + "+a");
+  await source.press("Shift+F10");
+  await menuAction("Cut");
+  await expect(source).toHaveText("");
+  await expect.poll(readClipboard).toBe("const compact={value:1};");
+  await source.press("Shift+F10");
+  await menuAction("Paste");
+  await expect(source).toHaveText("const compact={value:1};");
+  await open("src/example.py");
+  await page.locator(".editor-pane.active .cm-content").click({ button: "right" });
+  await expect(page.getByRole("menuitem", { name: "Format document", exact: true })).toBeDisabled();
+  await page.keyboard.press("Escape");
+  expect(errors).toEqual([]);
+});
+
+test("context menus address clicked table cells and retain undo and saved Markdown", async () => {
+  await fs.writeFile(file("notes/welcome.md"), "# Table\n\n| A | B |\n| --- | --- |\n| first | one |\n| second | two |\n");
+  await open("notes/welcome.md");
+  const editor = page.locator(".editor-pane.active .document-content");
+  const rows = editor.locator("tr");
+  await editor.locator("td").first().click();
+  await editor.getByText("two", { exact: true }).click({ button: "right" });
+  await menuAction("Insert row above");
+  await expect(rows).toHaveCount(4);
+  await expect(rows.nth(1)).toContainText("first");
+  await expect(rows.nth(2)).not.toContainText("second");
+  await expect(rows.nth(3)).toContainText("second");
+  await editor.getByText("two", { exact: true }).click({ button: "right" });
+  await menuAction("Insert column left");
+  await expect(rows.nth(3).locator("td")).toHaveCount(3);
+  await expect(rows.nth(3).locator("td").nth(2)).toHaveText("two");
+  await editor.getByText("two", { exact: true }).click({ button: "right" });
+  await menuAction("Delete row");
+  await expect(rows).toHaveCount(3);
+  await expect(editor).not.toContainText("two");
+  await editor.getByText("one", { exact: true }).click({ button: "right" });
+  await menuAction("Delete column");
+  await expect(rows.first().locator("th")).toHaveCount(2);
+  await save();
+  expect(await disk("notes/welcome.md")).toContain("first");
+  expect(await disk("notes/welcome.md")).not.toContain("two");
+  await editor.getByText("first", { exact: true }).click({ button: "right" });
+  await menuAction("Delete table");
+  await expect(editor.locator("table")).toHaveCount(0);
+  await editor.locator("h1").click({ button: "right" });
+  await menuAction("Undo");
+  await expect(editor.locator("table")).toHaveCount(1);
+  await editor.getByText("first", { exact: true }).click({ button: "right" });
+  await menuAction("Insert row below");
+  await expect(rows).toHaveCount(4);
+  await editor.getByText("first", { exact: true }).click({ button: "right" });
+  await menuAction("Insert column right");
+  await expect(rows.nth(1).locator("td")).toHaveCount(3);
+  await page.setViewportSize({ width: 900, height: 560 });
+  await editor.getByText("first", { exact: true }).click();
+  await page.keyboard.press("Shift+F10");
+  await expect(page.getByRole("menuitem", { name: "Delete table", exact: true })).toBeVisible();
+  const box = await page.getByRole("menu").boundingBox();
+  expect(box.y).toBeGreaterThanOrEqual(0);
+  expect(box.y + box.height).toBeLessThanOrEqual(560);
+  await page.getByRole("menu").screenshot({ path: "test-results/table-context-menu.png" });
+  await menuAction("Delete table");
+  await expect(editor.locator("table")).toHaveCount(0);
+  expect(errors).toEqual([]);
+});
+
+test("context menus open, copy, edit and remove the clicked hyperlink", async () => {
+  await fs.writeFile(file("notes/welcome.md"), "# Links\n\n[First](other.md) and [Second](../index.md).\n");
+  await open("notes/welcome.md");
+  const editor = page.locator(".editor-pane.active .document-content");
+  await editor.getByText("First", { exact: true }).click();
+  await page.keyboard.press("Shift+F10");
+  await expect(page.getByRole("menuitem", { name: "Edit link", exact: true })).toBeVisible();
+  await page.keyboard.press("Escape");
+  await editor.getByText("Second", { exact: true }).click({ button: "right" });
+  await menuAction("Copy link address");
+  await expect.poll(readClipboard).toBe("../index.md");
+  await editor.getByText("Second", { exact: true }).click({ button: "right" });
+  await menuAction("Edit link");
+  await expect(page.getByLabel("Link destination")).toHaveValue("../index.md");
+  await page.getByLabel("Link destination").fill("other.md#other");
+  await page.getByRole("button", { name: "Apply link", exact: true }).click();
+  await expect(editor.locator("a", { hasText: "Second" })).toHaveAttribute("href", "other.md#other");
+  await editor.getByText("First", { exact: true }).click({ button: "right" });
+  await menuAction("Remove link");
+  await expect(editor.locator("a")).toHaveCount(1);
+  await expect(editor).toContainText("First and Second.");
+  await save();
+  expect(await disk("notes/welcome.md")).toContain("First and [Second](other.md#other)");
+  await editor.getByText("Second", { exact: true }).click({ button: "right" });
+  await menuAction("Open link");
+  await expect(page.locator(".editor-tab.active")).toHaveAttribute("data-tooltip", "notes/other.md");
+  expect(errors).toEqual([]);
+});
+
+test("context menus target inactive tabs and stop bulk close on cancel", async () => {
+  await open("notes/welcome.md");
+  await page.getByRole("button", { name: "Markdown source mode", exact: true }).click();
+  await sourceFill("# Saved through inactive tab\n");
+  await open("src/example.py");
+  await sourceFill("print('keep unsaved')\n");
+  await open("notes/other.md");
+  const welcome = page.locator('.editor-tab[data-tooltip="notes/welcome.md"]');
+  const other = page.locator('.editor-tab[data-tooltip="notes/other.md"]');
+  await welcome.click({ button: "right" });
+  await menuAction("Save");
+  await expect.poll(() => diskWhenPresent("notes/welcome.md")).toBe("# Saved through inactive tab\n");
+  await expect(other).toHaveAttribute("aria-selected", "true");
+  await welcome.click({ button: "right" });
+  await menuAction("Copy file path");
+  await expect.poll(readClipboard).toBe(file("notes/welcome.md"));
+  await welcome.click({ button: "right" });
+  await menuAction("Close tabs to the right");
+  await expect(page.getByRole("dialog", { name: "Save example.py?", exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Cancel", exact: true }).click();
+  await expect(page.locator(".editor-tab")).toHaveCount(3);
+  await fs.writeFile(file("src/example.py"), "print('external change')\n");
+  await expect(page.locator('.editor-tab[data-tooltip="src/example.py"] .warning')).toBeVisible();
+  await welcome.click({ button: "right" });
+  await menuAction("Close other tabs");
+  await page.getByRole("button", { name: "Save", exact: true }).click();
+  await expect(page.getByRole("alert")).toContainText("Resolve the external change");
+  await expect(page.locator(".editor-tab")).toHaveCount(3);
+  expect(await disk("src/example.py")).toBe("print('external change')\n");
+  await welcome.click({ button: "right" });
+  await menuAction("Close other tabs");
+  await page.getByRole("button", { name: "Discard edits", exact: true }).click();
+  await expect(page.locator(".editor-tab")).toHaveCount(1);
+  await welcome.focus();
+  await welcome.press("Shift+F10");
+  await expect(page.getByRole("menuitem", { name: "Close other tabs", exact: true })).toBeDisabled();
+  await expect(page.getByRole("menuitem", { name: "Close tabs to the right", exact: true })).toBeDisabled();
+  await page.keyboard.press("Escape");
+  await expect(welcome).toBeFocused();
+  await page.getByRole("button", { name: "Toggle explorer", exact: true }).click();
+  await welcome.click({ button: "right" });
+  await menuAction("Reveal in explorer");
+  await expect(page.getByRole("treeitem", { name: "notes/welcome.md", exact: true })).toHaveAttribute("aria-selected", "true");
+  await welcome.click({ button: "right" });
+  await menuAction("Close all tabs");
+  await expect(page.locator(".editor-tab")).toHaveCount(0);
+  expect(errors).toEqual([]);
+});
+
+async function imageFixture() {
+  const sharp = (await import("sharp")).default;
+  const bytes = await sharp({
+    create: { width: 1200, height: 800, channels: 3, background: "#598bae" },
+  })
+    .png()
+    .toBuffer();
+  await fs.writeFile(file("assets/menu.png"), bytes);
+  return bytes;
+}
+async function clipboardImageSize() {
+  return app.evaluate(async ({ clipboard, nativeImage }) => {
+    const item = (await clipboard.read()).find((item) =>
+      item.types.includes("image/png"),
+    );
+    if (!item) return null;
+    const data = await item.getType("image/png");
+    return nativeImage
+      .createFromBuffer(Buffer.from(await data.arrayBuffer()))
+      .getSize();
+  });
+}
+async function captureReveals() {
+  await app.evaluate(({ shell }) => {
+    globalThis.menuReveals = [];
+    shell.showItemInFolder = (name) => {
+      globalThis.menuReveals.push(name);
+    };
+  });
+}
+const revealAction =
+  process.platform === "darwin"
+    ? "Reveal in Finder"
+    : "Reveal in File Explorer";
+
+test("P2 menus apply selected-text formatting through mouse and keyboard submenus", async () => {
+  await fs.writeFile(
+    file("notes/welcome.md"),
+    "# Formatting\n\nSelected words\n",
+  );
+  await open("notes/welcome.md");
+  const editor = page.locator(".editor-pane.active .document-content");
+  const text = editor.locator("p").first();
+  await text.click({ clickCount: 3 });
+  await page.keyboard.press("Shift+F10");
+  await page.getByRole("menuitem", { name: "Format", exact: true }).focus();
+  await page.keyboard.press("ArrowRight");
+  await expect(
+    page.getByRole("menu", { name: "Format", exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("menuitem", { name: "Bold", exact: true }),
+  ).toBeFocused();
+  await page.screenshot({ path: "test-results/p2-format-menu.png" });
+  await page.keyboard.press("ArrowLeft");
+  await expect(
+    page.getByRole("menuitem", { name: "Format", exact: true }),
+  ).toBeFocused();
+  await page.keyboard.press("ArrowRight");
+  await page.keyboard.press("Enter");
+  await expect(text.locator("strong")).toHaveText("Selected words");
+  await text.click({ button: "right" });
+  await menuAction("Format");
+  await menuAction("Italic");
+  await expect(text.locator("em")).toHaveText("Selected words");
+  await text.click({ button: "right" });
+  await menuAction("Format");
+  await menuAction("Clear formatting");
+  await expect(text.locator("strong,em")).toHaveCount(0);
+  await text.click({ button: "right" });
+  await menuAction("Format");
+  await menuAction("Strikethrough");
+  await expect(text.locator("s")).toHaveText("Selected words");
+  await text.click({ button: "right" });
+  await menuAction("Format");
+  await menuAction("Inline code");
+  await expect(text.locator("code")).toHaveText("Selected words");
+  await text.click({ button: "right" });
+  await menuAction("Format");
+  await menuAction("Clear formatting");
+  await text.click({ button: "right" });
+  await menuAction("Format");
+  await menuAction("Add link");
+  await page.getByLabel("Link destination").fill("other.md");
+  await page.getByRole("button", { name: "Apply link", exact: true }).click();
+  await save();
+  expect(await disk("notes/welcome.md")).toContain(
+    "[Selected words](other.md)",
+  );
+  expect(errors).toEqual([]);
+});
+
+test("P2 menus copy and edit code blocks and target list and checklist items", async () => {
+  await fs.writeFile(
+    file("notes/welcome.md"),
+    "# Blocks\n\n```js\nconst answer = 42;\n```\n\n- First\n- Second\n\n- [ ] Task one\n- [ ] Task two\n",
+  );
+  await open("notes/welcome.md");
+  const editor = page.locator(".editor-pane.active .document-content");
+  await editor.locator("pre").click({ button: "right" });
+  await menuAction("Copy code");
+  await expect.poll(readClipboard).toBe("const answer = 42;");
+  await editor.locator("pre").click({ button: "right" });
+  await menuAction("Change code language");
+  const language = page.getByLabel("Code block language");
+  await expect(language).toBeFocused();
+  await language.fill("typescript");
+  await editor.locator("pre").click({ button: "right" });
+  await menuAction("Delete code block");
+  await expect(editor.locator("pre")).toHaveCount(0);
+  await editor.locator("h1").click({ button: "right" });
+  await menuAction("Undo");
+  await expect(editor.locator("pre code")).toHaveAttribute(
+    "class",
+    /language-typescript/,
+  );
+  await editor.getByText("First", { exact: true }).click();
+  await editor.getByText("Second", { exact: true }).click({ button: "right" });
+  await menuAction("Indent list item");
+  await expect(editor.locator("ul ul")).toContainText("Second");
+  await editor.getByText("Second", { exact: true }).click({ button: "right" });
+  await menuAction("Outdent list item");
+  await expect(editor.locator("ul ul")).toHaveCount(0);
+  await editor.getByText("Second", { exact: true }).click({ button: "right" });
+  await menuAction("List type");
+  await expect(
+    page.getByRole("menuitem", { name: "Bullet list", exact: true }),
+  ).toBeDisabled();
+  await menuAction("Numbered list");
+  await expect(editor.locator("ol")).toContainText("Second");
+  await editor.getByText("Second", { exact: true }).click({ button: "right" });
+  await menuAction("List type");
+  await menuAction("Checklist");
+  await editor.getByText("Task one", { exact: true }).click();
+  await editor
+    .getByText("Task two", { exact: true })
+    .click({ button: "right" });
+  await menuAction("Mark complete");
+  await expect(editor.locator('li[data-checked="true"]')).toContainText(
+    "Task two",
+  );
+  await expect(
+    editor.locator('li[data-checked="false"]', { hasText: "Task one" }),
+  ).toHaveCount(1);
+  await editor
+    .getByText("Task two", { exact: true })
+    .click({ button: "right" });
+  await menuAction("Mark incomplete");
+  await expect(editor.locator('li[data-checked="true"]')).toHaveCount(0);
+  await save();
+  expect(await disk("notes/welcome.md")).toContain("- [ ] Task two");
+  await editor.getByText("Second", { exact: true }).click({ button: "right" });
+  await menuAction("List type");
+  await menuAction("Bullet list");
+  await save();
+  expect(await disk("notes/welcome.md")).toContain("```typescript");
+  expect(await disk("notes/welcome.md")).toContain("- Task two");
+  expect(errors).toEqual([]);
+});
+
+test("P2 menus copy inline image pixels, edit alt text, open viewer and preserve original bytes", async () => {
+  const original = await imageFixture();
+  await captureReveals();
+  await fs.writeFile(
+    file("notes/welcome.md"),
+    "# Images\n\n![Original alt](../assets/menu.png)\n",
+  );
+  await open("notes/welcome.md");
+  const editor = page.locator(".editor-pane.active .document-content");
+  const image = editor.locator("img[src]");
+  await expect(image).toBeVisible();
+  await image.click({ button: "right" });
+  await menuAction("Copy image");
+  await expect.poll(clipboardImageSize).toEqual({ width: 1200, height: 800 });
+  await expect(page.locator(".save-state")).toContainText("Saved");
+  await image.click({ button: "right" });
+  await menuAction("Copy image address");
+  await expect.poll(readClipboard).toBe("../assets/menu.png");
+  await image.click();
+  await page.keyboard.press("Shift+F10");
+  await menuAction("Edit alternative text");
+  await page.getByLabel("Image alternative text").fill("Updated alt");
+  await page
+    .getByRole("button", { name: "Apply alternative text", exact: true })
+    .click();
+  await expect(image).toHaveAttribute("alt", "Updated alt");
+  await save();
+  await page
+    .getByRole("button", { name: "Markdown source mode", exact: true })
+    .click();
+  await page.getByRole("button", { name: "Visual mode", exact: true }).click();
+  await expect(image).toHaveAttribute("alt", "Updated alt");
+  await image.click({ button: "right" });
+  await menuAction("Open in image viewer");
+  await expect(page.locator(".editor-tab.active")).toHaveAttribute(
+    "data-tooltip",
+    "assets/menu.png",
+  );
+  const viewport = page.getByRole("region", { name: "Image viewport" });
+  await viewport.click({ button: "right" });
+  await menuAction("Actual size (100%)");
+  await expect(page.getByRole("status", { name: "Image zoom" })).toHaveText(
+    "100%",
+  );
+  await viewport.press("Shift+F10");
+  await menuAction("Zoom in");
+  await expect(page.getByRole("status", { name: "Image zoom" })).toHaveText(
+    "125%",
+  );
+  await viewport.click({ button: "right" });
+  await menuAction("Zoom out");
+  await expect(page.getByRole("status", { name: "Image zoom" })).toHaveText(
+    "100%",
+  );
+  await viewport.click({ button: "right" });
+  await menuAction("Fit to window");
+  await expect(page.getByRole("status", { name: "Image zoom" })).not.toHaveText(
+    "100%",
+  );
+  await viewport.click({ button: "right" });
+  await menuAction("Copy file path");
+  await expect.poll(readClipboard).toBe(file("assets/menu.png"));
+  await viewport.click({ button: "right" });
+  await menuAction(revealAction);
+  expect(await app.evaluate(() => globalThis.menuReveals)).toEqual([
+    file("assets/menu.png"),
+  ]);
+  await viewport.click({ button: "right" });
+  await menuAction("Copy image");
+  await expect.poll(clipboardImageSize).toEqual({ width: 1200, height: 800 });
+  await open("notes/welcome.md");
+  await image.click({ button: "right" });
+  await menuAction("Remove image from document");
+  await expect(image).toHaveCount(0);
+  await save();
+  expect(await disk("notes/welcome.md")).not.toContain("menu.png");
+  expect(await fs.readFile(file("assets/menu.png"))).toEqual(original);
+  await editor.locator("h1").click({ button: "right" });
+  await menuAction("Undo");
+  await expect(image).toHaveAttribute("alt", "Updated alt");
+  const sharp = (await import("sharp")).default;
+  for (const format of ["jpeg", "webp", "gif", "avif"]) {
+    const bytes = await sharp({
+      create: { width: 32, height: 24, channels: 3, background: "#598bae" },
+    })
+      .toFormat(format)
+      .toBuffer();
+    await fs.writeFile(file(`assets/copy.${format}`), bytes);
+    await expect(
+      page.getByRole("treeitem", {
+        name: `assets/copy.${format}`,
+        exact: true,
+      }),
+    ).toBeVisible();
+    await open(`assets/copy.${format}`);
+    await setClipboard(`before ${format}`);
+    await page
+      .getByRole("region", { name: "Image viewport" })
+      .click({ button: "right" });
+    await menuAction("Copy image");
+    await expect.poll(clipboardImageSize).toEqual({ width: 32, height: 24 });
+  }
+  expect(errors).toEqual([]);
+});
+
+test("P2 menus preview and copy HTTPS images without creating local attachments", async () => {
+  const bytes = await imageFixture();
+  const url = "https://images.example.test/menu.png";
+  await page.route(url, (route) =>
+    route.fulfill({ contentType: "image/png", body: bytes }),
+  );
+  await app.evaluate(
+    ({ net }, data) => {
+      const original = net.fetch;
+      net.fetch = (address, options) =>
+        String(address) === data.url
+          ? Promise.resolve(
+              new Response(Buffer.from(data.bytes), {
+                headers: { "Content-Type": "image/png" },
+              }),
+            )
+          : original(address, options);
+    },
+    { url, bytes: [...bytes] },
+  );
+  await fs.writeFile(
+    file("notes/welcome.md"),
+    `# Remote\n\n![Remote image](${url})\n`,
+  );
+  await open("notes/welcome.md");
+  const image = page.locator(".editor-pane.active .document-content img[src]");
+  await expect(image).toBeVisible();
+  await image.click({ button: "right" });
+  await menuAction("Open in image viewer");
+  const dialog = page.getByRole("dialog", {
+    name: "Image preview",
+    exact: true,
+  });
+  await expect(dialog.getByRole("img")).toBeVisible();
+  await dialog
+    .getByRole("region", { name: "Image viewport" })
+    .click({ button: "right" });
+  await menuAction("Copy image");
+  await expect.poll(clipboardImageSize).toEqual({ width: 1200, height: 800 });
+  await page.keyboard.press("Escape");
+  await expect(dialog).toHaveCount(0);
+  expect(await fs.readdir(file("assets"))).toEqual(["menu.png"]);
+  expect(errors).toEqual([]);
+});
+
+test("P2 menus create in clicked folders and empty explorer space, copy paths and reveal safely", async () => {
+  await captureReveals();
+  await page
+    .getByRole("treeitem", { name: "assets", exact: true })
+    .click({ button: "right" });
+  await menuAction("New folder here");
+  await page.getByLabel("Name", { exact: true }).fill("Nested");
+  await page.getByRole("button", { name: "Create", exact: true }).click();
+  await expect(
+    page.getByRole("treeitem", { name: "assets/Nested", exact: true }),
+  ).toBeVisible();
+  await page
+    .getByRole("treeitem", { name: "assets/Nested", exact: true })
+    .click({ button: "right" });
+  await menuAction("Copy file path");
+  await expect.poll(readClipboard).toBe(file("assets/Nested"));
+  await page
+    .getByRole("treeitem", { name: "assets/Nested", exact: true })
+    .click({ button: "right" });
+  await menuAction(revealAction);
+  expect(await app.evaluate(() => globalThis.menuReveals)).toEqual([
+    file("assets/Nested"),
+  ]);
+  const tree = page.getByRole("tree", { name: "Workspace files", exact: true });
+  await tree.focus();
+  await tree.press("Shift+F10");
+  await expect(
+    page.getByRole("menuitem", { name: "Move to Trash", exact: true }),
+  ).toHaveCount(0);
+  await menuAction("New folder here");
+  await page.getByLabel("Name", { exact: true }).fill("Root folder");
+  await page.getByRole("button", { name: "Create", exact: true }).click();
+  await expect.poll(()=>fs.stat(file('Root folder')).then(stat=>stat.isDirectory()).catch(error=>{if(error.code==='ENOENT')return false;throw error;})).toBe(true);
+  await tree.focus();
+  await tree.press("Shift+F10");
+  await menuAction("New document here");
+  await page.getByLabel("Name", { exact: true }).fill("Root note.md");
+  await page.getByRole("button", { name: "Create", exact: true }).click();
+  await expect.poll(() => diskWhenPresent("Root note.md")).toBe("");
+  const refused = await page.evaluate(async () => {
+    const actions = [
+      () => window.margin.copyPath("../escape"),
+      () => window.margin.reveal("../escape"),
+      () => window.margin.imageBytes("file:///etc/passwd"),
+    ];
+    return Promise.all(
+      actions.map(async (action) => {
+        try {
+          await action();
+          return false;
+        } catch {
+          return true;
+        }
+      }),
+    );
+  });
+  expect(refused).toEqual([true, true, true]);
+  expect(errors).toEqual([]);
+});
+
+test("P2 menus use terminal selection, real clipboard paste, links and view-only clearing", async () => {
+  await page
+    .getByRole("button", { name: "Toggle terminal", exact: true })
+    .click();
+  await page.getByRole("button", { name: "New terminal", exact: true }).click();
+  const terminal = page.locator(".terminal-view.active");
+  const input = terminal.locator(".xterm-helper-textarea");
+  await expect(input).toBeVisible();
+  await input.focus();
+  await setClipboard(
+    process.platform === "win32"
+      ? "Set-Content p2-terminal.txt 'paste worked'; Write-Output 'P2_READY'"
+      : "printf 'paste worked' > p2-terminal.txt; printf 'P2_READY\\n'",
+  );
+  await input.press("Shift+F10");
+  await expect(
+    page.getByRole("menuitem", { name: "Copy selection", exact: true }),
+  ).toBeDisabled();
+  await menuAction("Paste");
+  await page.keyboard.press("Enter");
+  await expect
+    .poll(() => diskWhenPresent("p2-terminal.txt"))
+    .toBe("paste worked" + (process.platform === "win32" ? "\r\n" : ""));
+  await expect(terminal.locator(".xterm-rows")).toContainText("P2_READY");
+  await input.press("Shift+F10");
+  await menuAction("Select all");
+  await input.press("Shift+F10");
+  await menuAction("Copy selection");
+  await expect.poll(readClipboard).toContain("P2_READY");
+  await input.press("Shift+F10");
+  await menuAction("Clear view");
+  await expect(terminal.locator(".xterm-rows")).not.toContainText("P2_READY");
+  const url = "https://example.test/menu";
+  await input.focus();
+  await page.keyboard.type(
+    process.platform === "win32"
+      ? `Write-Output '${url}'`
+      : `printf '${url}\\n'`,
+  );
+  await page.keyboard.press("Enter");
+  const output = terminal
+    .locator(".xterm-rows > div")
+    .filter({ hasText: url })
+    .last();
+  await expect(output).toBeVisible();
+  const bounds = await output.getByText(url, { exact: true }).boundingBox();
+  await page.mouse.move(
+    bounds.x + bounds.width / 2,
+    bounds.y + bounds.height / 2,
+  );
+  await page.mouse.click(
+    bounds.x + bounds.width / 2,
+    bounds.y + bounds.height / 2,
+    { button: "right" },
+  );
+  await menuAction("Copy link address");
+  await expect.poll(readClipboard).toBe(url);
+  await app.evaluate(({ shell }) => {
+    globalThis.menuExternal = [];
+    shell.openExternal = async (url) => {
+      globalThis.menuExternal.push(url);
+    };
+  });
+  await page.mouse.move(
+    bounds.x + bounds.width / 2,
+    bounds.y + bounds.height / 2,
+  );
+  await page.mouse.click(
+    bounds.x + bounds.width / 2,
+    bounds.y + bounds.height / 2,
+    { button: "right" },
+  );
+  await menuAction("Open link");
+  expect(await app.evaluate(() => globalThis.menuExternal)).toEqual([url]);
+  expect(errors).toEqual([]);
+});
+
+test("P3 section menus copy identical full titles and links in visual, source and outline", async () => {
+  const path = "notes/section # (é).md";
+  const longTitle = "A very long " + "section title ".repeat(20).trim();
+  const original = `# Overview\n\nLead body.\n\n## Repeat **é** & tea\n\nBody.\n\n## Repeat **é** & tea\n\n### ${longTitle}\n\nEnd.\n`;
+  await fs.writeFile(file(path), original);
+  await expect(
+    page.getByRole("treeitem", { name: path, exact: true }),
+  ).toBeVisible();
+  await open(path);
+  const editor = page.locator(".editor-pane.active .document-content");
+  const expected =
+    "[Repeat é \\& tea](/notes/section%20%23%20%28%C3%A9%29.md#repeat-%C3%A9--tea-1)";
+  await editor.locator("h2").last().click({ button: "right" });
+  await menuAction("Copy section link");
+  await expect.poll(readClipboard).toBe(expected);
+  await editor.locator("h2").last().click();
+  await page.keyboard.press("Shift+F10");
+  await menuAction("Copy section title");
+  await expect.poll(readClipboard).toBe("Repeat é & tea");
+  await page.getByRole("button", { name: "Show outline", exact: true }).click();
+  const outline = page.getByRole("complementary", { name: "Document outline" });
+  const repeated = outline
+    .locator(".outline-entry")
+    .filter({ hasText: "Repeat é & tea" })
+    .last();
+  await repeated.click({ button: "right" });
+  await menuAction("Copy section link");
+  await expect.poll(readClipboard).toBe(expected);
+  const long = outline
+    .locator(".outline-entry")
+    .filter({ hasText: "A very long" });
+  await long.focus();
+  await long.press("Shift+F10");
+  await menuAction("Copy section title");
+  await expect.poll(readClipboard).toBe(longTitle);
+  await expect(long).toBeFocused();
+  await editor.locator("h3").click({ button: "right" });
+  await menuAction("Copy section title");
+  await expect.poll(readClipboard).toBe(longTitle);
+  await editor
+    .getByText("Lead body.", { exact: true })
+    .click({ button: "right" });
+  await expect(
+    page.getByRole("menuitem", { name: "Copy section link", exact: true }),
+  ).toHaveCount(0);
+  await page.keyboard.press("Escape");
+  await page
+    .getByRole("button", { name: "Markdown source mode", exact: true })
+    .click();
+  const source = page.locator(".editor-pane.active .cm-content");
+  await source
+    .locator(".cm-line")
+    .filter({ hasText: "## Repeat **é** & tea" })
+    .last()
+    .click({ button: "right" });
+  await menuAction("Copy section link");
+  await expect.poll(readClipboard).toBe(expected);
+  await expect(page.locator(".save-state")).toContainText("Saved");
+  expect(await disk(path)).toBe(original);
+  expect(errors).toEqual([]);
+});
+
+test("P3 section links navigate to the second matching heading from another note in both modes", async () => {
+  const path = "notes/targets.md";
+  const original =
+    "\uFEFF---\r\ntitle: Target\r\n---\r\n" +
+    (
+      "# Start\n\n## Repeat\n\n" +
+      "Body paragraph.\n\n".repeat(35) +
+      "## Repeat\n\n" +
+      "Tail paragraph.\n\n".repeat(35)
+    ).replace(/\n/g, "\r\n");
+  await fs.writeFile(file(path), original);
+  await expect(
+    page.getByRole("treeitem", { name: path, exact: true }),
+  ).toBeVisible();
+  await open(path);
+  await page
+    .locator(".editor-pane.active .document-content h2")
+    .last()
+    .click({ button: "right" });
+  await menuAction("Copy section link");
+  const copied = await readClipboard();
+  expect(copied).toBe("[Repeat](/notes/targets.md#repeat-1)");
+  await fs.writeFile(file("notes/other.md"), "# Links\n\nPaste here.\n");
+  await open("notes/other.md");
+  await page.locator(".editor-pane.active .document-content p").click({ clickCount: 3 });
+  await page.keyboard.press(shortcut + "+v");
+  const jump = page.locator(
+    '.editor-pane.active .document-content a[href="/notes/targets.md#repeat-1"]',
+  );
+  await jump.click({ modifiers: [shortcut] });
+  await expect(page.locator(".editor-tab.active")).toHaveAttribute(
+    "data-tooltip",
+    path,
+  );
+  await expect
+    .poll(() =>
+      page
+        .locator(".editor-pane.active .document-content h2")
+        .last()
+        .evaluate((heading) => {
+          const viewport = heading
+            .closest(".document-scroll")
+            .getBoundingClientRect();
+          return Math.abs(heading.getBoundingClientRect().top - viewport.top);
+        }),
+    )
+    .toBeLessThan(80);
+  await page
+    .getByRole("button", { name: "Markdown source mode", exact: true })
+    .click();
+  await open("notes/other.md");
+  await jump.click({ modifiers: [shortcut] });
+  const source = page.locator(".editor-pane.active .cm-content");
+  await expect(source).toBeFocused();
+  await page.keyboard.insertText("TARGET ");
+  await save();
+  const second = original.lastIndexOf("## Repeat");
+  expect(await disk(path)).toBe(
+    original.slice(0, second) + "TARGET " + original.slice(second),
+  );
+  expect(errors).toEqual([]);
+});
+
+test("P3 section menus support protected Setext headings, unsaved changes and fenced exclusions", async () => {
+  const path = "notes/welcome.md";
+  const original =
+    "\uFEFF---\r\ntitle: Protected\r\n---\r\n\r\n# Same\r\n\r\nSame\r\n----\r\n\r\n[[protected]]\r\n";
+  await fs.writeFile(file(path), original);
+  await open(path);
+  const source = page.locator(".editor-pane.active .cm-content");
+  await source
+    .locator(".cm-line")
+    .filter({ hasText: /^Same$/ })
+    .click({ button: "right" });
+  await menuAction("Copy section link");
+  await expect.poll(readClipboard).toBe("[Same](/notes/welcome.md#same-1)");
+  await page.getByRole("button", { name: "Show outline", exact: true }).click();
+  const outline = page.getByRole("complementary", { name: "Document outline" });
+  await outline.locator(".outline-entry").last().click({ button: "right" });
+  await menuAction("Copy section title");
+  await expect.poll(readClipboard).toBe("Same");
+  await expect(page.locator(".save-state")).toContainText("Saved");
+  expect(await disk(path)).toBe(original);
+  await sourceFill(
+    "# Draft\n\n## Fresh heading\n\n```md\n# Fake heading\n```\n",
+  );
+  await source
+    .locator(".cm-line")
+    .filter({ hasText: "## Fresh heading" })
+    .click({ button: "right" });
+  await menuAction("Copy section title");
+  await expect.poll(readClipboard).toBe("Fresh heading");
+  const fresh = outline
+    .locator(".outline-entry")
+    .filter({ hasText: "Fresh heading" });
+  await fresh.click({ button: "right" });
+  await menuAction("Copy section link");
+  await expect
+    .poll(readClipboard)
+    .toBe("[Fresh heading](/notes/welcome.md#fresh-heading)");
+  await source
+    .locator(".cm-line")
+    .filter({ hasText: "# Fake heading" })
+    .click({ button: "right" });
+  await expect(
+    page.getByRole("menuitem", { name: "Copy section title", exact: true }),
+  ).toHaveCount(0);
+  await page.keyboard.press("Escape");
+  await expect(page.locator(".save-state")).toContainText("Unsaved");
+  expect(await disk(path)).toBe(original);
+  expect(errors).toEqual([]);
+});
+
+test("P3 source regression preserves CRLF through formatting, undo and redo", async () => {
+  await page.getByRole("button", { name: "Preferences", exact: true }).click();
+  await page
+    .getByLabel("Automatically format code on open", { exact: true })
+    .uncheck();
+  await page
+    .getByRole("button", { name: "Close preferences", exact: true })
+    .click();
+  const path = "src/example.json";
+  const original = '{"a":1,\r\n"b":{"x":2}}\r\n';
+  await fs.writeFile(file(path), original);
+  await open(path);
+  await expect(page.locator(".save-state")).toContainText("Saved");
+  const source = page.locator(".editor-pane.active .cm-content");
+  await source.click({ button: "right" });
+  await menuAction("Format document");
+  await expect(page.locator(".save-state")).toContainText("Unsaved");
+  await save();
+  const formatted = await disk(path);
+  expect(formatted).toContain('\r\n  "a": 1,\r\n');
+  expect(formatted.replace(/\r\n/g, "")).not.toContain("\n");
+  await source.click({ button: "right" });
+  await menuAction("Undo");
+  await save();
+  expect(await disk(path)).toBe(original);
+  await source.click({ button: "right" });
+  await menuAction("Redo");
+  await save();
+  expect(await disk(path)).toBe(formatted);
+  expect(errors).toEqual([]);
+});
+
+test("QoL workspace search filters contents, includes dirty buffers and jumps to exact matches", async () => {
+  await fs.writeFile(file("notes/other.md"), "# Search\n\nA QOLNEEDLE here.\n");
+  await fs.writeFile(file("src/example.py"), "# QOLNEEDLE in source\n");
+  await fs.mkdir(file("node_modules"));
+  await fs.writeFile(file("node_modules/hidden.md"), "QOLNEEDLE");
+  await page.keyboard.press(shortcut + "+Shift+f");
+  const panel = page.getByRole("region", { name: "Workspace search" });
+  await panel.getByLabel("Search workspace contents").fill("QOLNEEDLE");
+  await expect(panel.getByRole("status")).toContainText("2 matches");
+  await panel.getByLabel("Files to include").fill("*.md");
+  await expect(panel.getByRole("status")).toContainText("1 matches");
+  await panel.getByLabel("Files to exclude").fill("notes/**");
+  await expect(panel.getByRole("status")).toContainText("0 matches");
+  await panel.getByLabel("Files to exclude").fill("");
+  await expect(panel.getByRole("status")).toContainText("1 matches");
+  await page.screenshot({ path: "test-results/qol-workspace-search.png" });
+  await panel
+    .getByRole("button", {
+      name: "notes/other.md, line 3, column 3",
+      exact: true,
+    })
+    .click();
+  await expect(
+    page.getByRole("button", { name: "Markdown source mode", exact: true }),
+  ).toHaveClass("active");
+  const source = page.locator(".editor-pane.active .cm-content");
+  await expect(source).toBeFocused();
+  await page.keyboard.insertText("MATCHED");
+  await save();
+  expect(await disk("notes/other.md")).toBe("# Search\n\nA MATCHED here.\n");
+  await sourceFill("# Unsaved\n\nQOL_DRAFT_ONLY\n");
+  await panel.getByLabel("Search workspace contents").fill("QOL_DRAFT_ONLY");
+  await expect(panel.getByRole("status")).toContainText("1 matches");
+  expect(await disk("notes/other.md")).not.toContain("QOL_DRAFT_ONLY");
+  await sourceFill("");
+  await panel.getByLabel("Search workspace contents").fill("MATCHED");
+  await expect(panel.getByRole("status")).toContainText("0 matches");
+  expect(errors).toEqual([]);
+});
+
+test("QoL visual find searches across formatting and replaces all in one undo step", async () => {
+  const original =
+    "# Search\n\nA nee**dle** and NEEDLE and needles.\n\n```js\nneedle\n```\n";
+  await fs.writeFile(file("notes/welcome.md"), original);
+  await open("notes/welcome.md");
+  const editor = page.locator(".editor-pane.active .document-content");
+  await page.keyboard.press(shortcut + "+f");
+  const find = page.getByRole("search", { name: "Find in document" });
+  await find.getByLabel("Find text").fill("needle");
+  await expect(find.getByRole("status")).toHaveText("1 of 4");
+  await find.getByLabel("Whole word", { exact: true }).check();
+  await expect(find.getByRole("status")).toHaveText("1 of 3");
+  await find.getByLabel("Match case", { exact: true }).check();
+  await expect(find.getByRole("status")).toHaveText("1 of 2");
+  await find.getByLabel("Find text").press("Enter");
+  await expect(find.getByRole("status")).toHaveText("2 of 2");
+  await find.getByLabel("Find text").press("Shift+Enter");
+  await expect(find.getByRole("status")).toHaveText("1 of 2");
+  await expect(page.locator(".save-state")).toContainText("Saved");
+  await find
+    .getByRole("button", { name: "Toggle replace", exact: true })
+    .click();
+  await find.getByLabel("Replace with").fill("found");
+  await page.screenshot({ path: "test-results/qol-visual-find.png" });
+  await find.getByRole("button", { name: "Replace all", exact: true }).click();
+  await expect(editor.locator("p").first()).toHaveText(
+    "A found and NEEDLE and needles.",
+  );
+  await expect(editor.locator("pre")).toHaveText("found");
+  await page.getByRole("button", { name: "Undo", exact: true }).click();
+  await expect(editor.locator("p").first()).toHaveText(
+    "A needle and NEEDLE and needles.",
+  );
+  await expect(editor.locator("strong")).toHaveText("dle");
+  await expect(editor.locator("pre")).toHaveText("needle");
+  await find.getByLabel("Find text").press("Escape");
+  await expect(find).toHaveCount(0);
+  await expect(editor).toBeFocused();
+  expect(await disk("notes/welcome.md")).toBe(original);
+  expect(errors).toEqual([]);
+});
+
+test("QoL replace current advances past inserted matches and supports the replace shortcut", async () => {
+  await fs.writeFile(file("notes/welcome.md"), "# Replace\n\nfoo foo\n");
+  await open("notes/welcome.md");
+  await page.keyboard.press(
+    process.platform === "darwin" ? "Meta+Alt+f" : "Control+h",
+  );
+  const find = page.getByRole("search", { name: "Find in document" });
+  await find.getByLabel("Find text").fill("foo");
+  await find.getByLabel("Replace with").fill("foobar");
+  await find
+    .getByRole("button", { name: "Replace current", exact: true })
+    .click();
+  await find
+    .getByRole("button", { name: "Replace current", exact: true })
+    .click();
+  await expect(
+    page.locator(".editor-pane.active .document-content p"),
+  ).toHaveText("foobar foobar");
+  expect(errors).toEqual([]);
+});
+
+test("QoL navigation restores selections and scroll, supports forward and branches after Back", async () => {
+  const original =
+    "# First\n\nANCHOR_xyz\n\n" +
+    "body\n\n".repeat(30) +
+    "## Bottom\n\nTail.\n";
+  await fs.writeFile(file("notes/welcome.md"), original);
+  await open("notes/welcome.md");
+  await page
+    .getByRole("button", { name: "Markdown source mode", exact: true })
+    .click();
+  let source = page.locator(".editor-pane.active .cm-content");
+  await source.locator(".cm-line").filter({ hasText: "ANCHOR_xyz" }).click();
+  await page.keyboard.press(
+    process.platform === "darwin" ? "Meta+ArrowLeft" : "Home",
+  );
+  for (let i = 0; i < 7; i++) await page.keyboard.press("ArrowRight");
+  for (let i = 0; i < 3; i++) await page.keyboard.press("Shift+ArrowRight");
+  await open("notes/other.md");
+  await page
+    .getByRole("button", { name: "Navigate back", exact: true })
+    .click();
+  await expect(source).toBeFocused();
+  await page.keyboard.insertText("BACK");
+  await expect(source).toContainText("ANCHOR_BACK");
+  await page.keyboard.press(shortcut + "+z");
+  await page
+    .getByRole("button", { name: "Navigate forward", exact: true })
+    .click();
+  await expect(page.locator(".editor-tab.active")).toHaveAttribute(
+    "data-tooltip",
+    "notes/other.md",
+  );
+  await page.keyboard.press("Alt+ArrowLeft");
+  await expect(page.locator(".editor-tab.active")).toHaveAttribute(
+    "data-tooltip",
+    "notes/welcome.md",
+  );
+  await open("src/example.py");
+  await expect(
+    page.getByRole("button", { name: "Navigate forward", exact: true }),
+  ).toBeDisabled();
+  await open("notes/welcome.md");
+  await page.getByRole("button", { name: "Show outline", exact: true }).click();
+  await page
+    .getByRole("complementary", { name: "Document outline" })
+    .getByRole("button", { name: /Bottom, line/ })
+    .click();
+  await expect(source).toBeFocused();
+  await page.keyboard.insertText("JUMP ");
+  await expect(source).toContainText("JUMP ## Bottom");
+  await page.keyboard.press(shortcut + "+z");
+  await page
+    .getByRole("button", { name: "Navigate back", exact: true })
+    .click();
+  await expect(source).toBeFocused();
+  await page.keyboard.insertText("RETURN");
+  await expect(source).toContainText("ANCHOR_RETURN");
+  expect(await disk("notes/welcome.md")).toBe(original);
+  expect(errors).toEqual([]);
+});
+
+test("QoL mode switches retain formatted text selection and reading position", async () => {
+  const original =
+    "# Mode\n\n" +
+    "Body paragraph.\n\n".repeat(35) +
+    "Target **needle** here.\n\n" +
+    "Tail paragraph.\n\n".repeat(35);
+  await fs.writeFile(file("notes/welcome.md"), original);
+  await open("notes/welcome.md");
+  const editor = page.locator(".editor-pane.active .document-content");
+  await editor.getByText("needle", { exact: true }).dblclick();
+  await page
+    .getByRole("button", { name: "Markdown source mode", exact: true })
+    .click();
+  const source = page.locator(".editor-pane.active .cm-content");
+  await expect(source).toBeFocused();
+  await page.keyboard.insertText("SOURCE");
+  await expect(source).toContainText("Target **SOURCE** here.");
+  await page.keyboard.press(shortcut + "+z");
+  await page.getByRole("button", { name: "Visual mode", exact: true }).click();
+  await expect(editor).toBeFocused();
+  await page.keyboard.insertText("VISUAL");
+  await expect(editor.locator("strong")).toHaveText("VISUAL");
+  await expect
+    .poll(() =>
+      editor.locator("strong").evaluate((element) => {
+        const viewport = element
+          .closest(".document-scroll")
+          .getBoundingClientRect();
+        const rect = element.getBoundingClientRect();
+        return (
+          rect.top >= viewport.top - 5 && rect.bottom <= viewport.bottom + 5
+        );
+      }),
+    )
+    .toBe(true);
+  expect(await disk("notes/welcome.md")).toBe(original);
+  expect(errors).toEqual([]);
+});
+
+test("QoL session restores source caret, mode and scroll after restarting", async () => {
+  const original =
+    "# Resume\n\n" +
+    "Body line.\n\n".repeat(50) +
+    "## Remember\n\n" +
+    "Tail line.\n\n".repeat(30);
+  await fs.writeFile(file("notes/welcome.md"), original);
+  await open("notes/welcome.md");
+  await page
+    .getByRole("button", { name: "Markdown source mode", exact: true })
+    .click();
+  await page.getByRole("button", { name: "Show outline", exact: true }).click();
+  await page
+    .getByRole("complementary", { name: "Document outline" })
+    .getByRole("button", { name: /Remember, line/ })
+    .click();
+  let source = page.locator(".editor-pane.active .cm-content");
+  await expect(source).toBeFocused();
+  for (let i = 0; i < 3; i++) await page.keyboard.press("ArrowRight");
+  const expected = original.indexOf("Remember");
+  await expect
+    .poll(async () => {
+      const saved = JSON.parse(
+        await fs.readFile(path.join(data, "state.json"), "utf8"),
+      );
+      return saved.sessions[root]?.tabs[0]?.position?.sourceHead;
+    })
+    .toBe(expected);
+  const scroll = await page
+    .locator(".editor-pane.active .cm-scroller")
+    .evaluate((element) => element.scrollTop);
+  expect(scroll).toBeGreaterThan(100);
+  await app.evaluate(({ app }) => app.exit());
+  await app.close().catch(() => {});
+  await launch();
+  source = page.locator(".editor-pane.active .cm-content");
+  await expect(
+    page.getByRole("button", { name: "Markdown source mode", exact: true }),
+  ).toHaveClass("active");
+  await expect(source).toBeFocused();
+  await expect
+    .poll(() =>
+      page
+        .locator(".editor-pane.active .cm-scroller")
+        .evaluate(
+          (element, previous) => Math.abs(element.scrollTop - previous),
+          scroll,
+        ),
+    )
+    .toBeLessThan(50);
+  await page.keyboard.insertText("RESUMED ");
+  await save();
+  expect(await disk("notes/welcome.md")).toBe(
+    original.slice(0, expected) + "RESUMED " + original.slice(expected),
+  );
+  expect(errors).toEqual([]);
+});
+
+test("QoL closed tabs reopen once per shortcut, persist, and never resurrect discarded edits", async () => {
+  const original = await disk("notes/welcome.md");
+  await open("notes/welcome.md");
+  await page
+    .getByRole("button", { name: "Markdown source mode", exact: true })
+    .click();
+  await sourceFill("SECRET_DISCARDED_DRAFT");
+  await page
+    .getByRole("button", { name: "Close welcome.md", exact: true })
+    .click();
+  await page.getByRole("button", { name: "Cancel", exact: true }).click();
+  await expect(
+    page.getByRole("button", { name: "Reopen closed tab", exact: true }),
+  ).toBeDisabled();
+  await page
+    .getByRole("button", { name: "Close welcome.md", exact: true })
+    .click();
+  await page
+    .getByRole("button", { name: "Discard edits", exact: true })
+    .click();
+  await expect
+    .poll(async () =>
+      (await fs.readFile(path.join(data, "state.json"), "utf8")).includes(
+        "SECRET_DISCARDED_DRAFT",
+      ),
+    )
+    .toBe(false);
+  await page.keyboard.press(shortcut + "+Shift+t");
+  await expect(page.locator(".editor-tab")).toHaveCount(1);
+  await expect(
+    page.locator(".editor-pane.active .cm-content"),
+  ).not.toContainText("SECRET_DISCARDED_DRAFT");
+  await expect(
+    page.getByRole("button", { name: "Reopen closed tab", exact: true }),
+  ).toBeDisabled();
+  expect(await disk("notes/welcome.md")).toBe(original);
+  await open("notes/other.md");
+  await page
+    .getByRole("button", { name: "Close welcome.md", exact: true })
+    .click();
+  await page
+    .getByRole("button", { name: "Close other.md", exact: true })
+    .click();
+  await expect(page.locator(".editor-tab")).toHaveCount(0);
+  await page.keyboard.press(shortcut + "+Shift+t");
+  await expect(page.locator(".editor-tab")).toHaveCount(1);
+  await expect(page.locator(".editor-tab.active")).toHaveAttribute(
+    "data-tooltip",
+    "notes/other.md",
+  );
+  await expect
+    .poll(
+      async () =>
+        JSON.parse(await fs.readFile(path.join(data, "state.json"), "utf8"))
+          .sessions[root].closedTabs.length,
+    )
+    .toBe(1);
+  await app.evaluate(({ app }) => app.exit());
+  await app.close().catch(() => {});
+  await launch();
+  await page.keyboard.press(shortcut + "+Shift+t");
+  await expect(page.locator(".editor-tab")).toHaveCount(2);
+  await expect(page.locator(".editor-tab.active")).toHaveAttribute(
+    "data-tooltip",
+    "notes/welcome.md",
+  );
+  expect(errors).toEqual([]);
+});
+
+test("QoL session restores a visual selection without modifying the note", async () => {
+  const original =
+    "# Visual resume\n\n" +
+    "Body paragraph.\n\n".repeat(30) +
+    "Target **needle** here.\n\n" +
+    "Tail paragraph.\n\n".repeat(20);
+  await fs.writeFile(file("notes/welcome.md"), original);
+  await open("notes/welcome.md");
+  let editor = page.locator(".editor-pane.active .document-content");
+  await editor.getByText("needle", { exact: true }).dblclick();
+  await expect
+    .poll(async () => {
+      const saved = JSON.parse(
+        await fs.readFile(path.join(data, "state.json"), "utf8"),
+      );
+      return saved.sessions[root]?.tabs[0]?.position?.sourceHead;
+    })
+    .toBe(original.indexOf("needle") + "needle".length);
+  const scroll = await page
+    .locator(".editor-pane.active .document-scroll")
+    .evaluate((element) => element.scrollTop);
+  await app.evaluate(({ app }) => app.exit());
+  await app.close().catch(() => {});
+  await launch();
+  editor = page.locator(".editor-pane.active .document-content");
+  await expect(editor).toBeFocused();
+  await expect
+    .poll(() =>
+      page
+        .locator(".editor-pane.active .document-scroll")
+        .evaluate(
+          (element, previous) => Math.abs(element.scrollTop - previous),
+          scroll,
+        ),
+    )
+    .toBeLessThan(50);
+  expect(await disk("notes/welcome.md")).toBe(original);
+  await expect(page.locator(".save-state")).toContainText("Saved");
+  await page.keyboard.insertText("RESUMED");
+  await expect(editor.locator("strong")).toHaveText("RESUMED");
+  await save();
+  expect(await disk("notes/welcome.md")).toContain("Target **RESUMED** here.");
+  expect(errors).toEqual([]);
+});
+
+test("QoL workspace results preserve source bytes with automatic formatting enabled", async () => {
+  const original = "const QOL_FORMAT={value:1};\n";
+  await fs.writeFile(file("src/example.js"), original);
+  await page.keyboard.press(shortcut + "+Shift+f");
+  const panel = page.getByRole("region", { name: "Workspace search" });
+  await panel.getByLabel("Search workspace contents").fill("value:1");
+  await expect(panel.getByRole("status")).toContainText("1 matches");
+  await panel
+    .getByRole("button", {
+      name: "src/example.js, line 1, column 19",
+      exact: true,
+    })
+    .click();
+  const source = page.locator(".editor-pane.active .cm-content");
+  await expect(source).toBeFocused();
+  await expect(source).toHaveText(original.trim());
+  await expect(page.locator(".save-state")).toContainText("Saved");
+  expect(await disk("src/example.js")).toBe(original);
+  await expect
+    .poll(async () => {
+      const saved = JSON.parse(
+        await fs.readFile(path.join(data, "state.json"), "utf8"),
+      );
+      const tab = saved.sessions[root]?.tabs.find(
+        (tab) => tab.path === "src/example.js",
+      );
+      return tab?.suppressAutoFormat && tab.position?.sourceHead;
+    })
+    .toBe(original.indexOf("value:1") + "value:1".length);
+  await app.evaluate(({ app }) => app.exit());
+  await app.close().catch(() => {});
+  await launch();
+  await expect(page.locator(".editor-pane.active .cm-content")).toBeFocused();
+  await expect(page.locator(".editor-pane.active .cm-content")).toHaveText(
+    original.trim(),
+  );
+  await expect(page.locator(".save-state")).toContainText("Saved");
+  await page.keyboard.insertText("value:2");
+  await save();
+  expect(await disk("src/example.js")).toBe(
+    original.replace("value:1", "value:2"),
+  );
+  expect(errors).toEqual([]);
+});
+
+test("P2 QoL Quick Open supports fuzzy filenames, recent files, line columns and session history", async () => {
+  const original = "first\r\nsecond\r\nthird\r\n";
+  await fs.writeFile(file("src/example.py"), original);
+  await page.keyboard.press(shortcut + "+p");
+  const palette = page.getByRole("dialog", { name: "Quick open", exact: true });
+  await palette.getByLabel("Search files").fill("expy:2:3");
+  await expect(
+    palette.locator(".palette-results > button").first(),
+  ).toContainText("example.py");
+  await page.keyboard.press("Enter");
+  const source = page.locator(".editor-pane.active .cm-content");
+  await expect(source).toBeFocused();
+  await page.keyboard.insertText("HERE");
+  await save();
+  expect(await disk("src/example.py")).toBe(
+    original.replace("second", "seHEREcond"),
+  );
+  await open("notes/welcome.md");
+  await open("notes/other.md");
+  await page.keyboard.press(shortcut + "+p");
+  await expect(
+    palette.locator(".palette-results > button").first(),
+  ).toContainText("other.md");
+  await page.keyboard.press("Escape");
+  await expect
+    .poll(
+      async () =>
+        JSON.parse(await fs.readFile(path.join(data, "state.json"), "utf8"))
+          .sessions[root]?.recentFiles[0],
+    )
+    .toBe("notes/other.md");
+  await app.evaluate(({ app }) => app.exit());
+  await app.close().catch(() => {});
+  await launch();
+  await page.keyboard.press(shortcut + "+p");
+  await expect(
+    page
+      .getByRole("dialog", { name: "Quick open", exact: true })
+      .locator(".palette-results > button")
+      .first(),
+  ).toContainText("other.md");
+  expect(errors).toEqual([]);
+});
+
+test("P2 QoL Save Copy retains dirty contents and Save As switches the file without overwriting the original", async () => {
+  const original = await disk("notes/welcome.md");
+  await open("notes/welcome.md");
+  await page
+    .getByRole("button", { name: "Markdown source mode", exact: true })
+    .click();
+  const draft = "# Draft\n\n[Other](other.md#other)\n";
+  await sourceFill(draft);
+  const tab = () =>
+    page.locator('.editor-tab[data-tooltip="notes/welcome.md"]');
+  await tab().click({ button: "right" });
+  await menuAction("Save a copy…");
+  await page
+    .getByLabel("Workspace-relative path", { exact: true })
+    .fill("archive/copy.md");
+  await page.getByRole("button", { name: "Save copy", exact: true }).click();
+  await expect
+    .poll(() => diskWhenPresent("archive/copy.md").catch(error=>{if(error.code==='ENOENT')return '';throw error;}))
+    .toBe(draft.replace("other.md", "../notes/other.md"));
+  await expect(tab()).toHaveAttribute("aria-selected", "true");
+  await expect(page.locator(".save-state")).toContainText("Unsaved");
+  expect(await disk("notes/welcome.md")).toBe(original);
+  await tab().click({ button: "right" });
+  await menuAction("Save as…");
+  await page
+    .getByLabel("Workspace-relative path", { exact: true })
+    .fill("archive/copy.md");
+  await page.getByRole("button", { name: "Save as", exact: true }).click();
+  await expect(page.getByRole("alert")).toBeVisible();
+  await expect(tab()).toHaveCount(1);
+  await tab().click({ button: "right" });
+  await menuAction("Save as…");
+  await page
+    .getByLabel("Workspace-relative path", { exact: true })
+    .fill("notes/renamed.md");
+  await page.getByRole("button", { name: "Save as", exact: true }).click();
+  await expect(page.locator(".editor-tab.active")).toHaveAttribute(
+    "data-tooltip",
+    "notes/renamed.md",
+  );
+  await expect(tab()).toHaveCount(0);
+  await expect(page.locator(".save-state")).toContainText("Saved");
+  expect(await disk("notes/renamed.md")).toBe(draft);
+  expect(await disk("notes/welcome.md")).toBe(original);
+  expect(errors).toEqual([]);
+});
+
+test("P2 QoL outline follows caret and scroll, filters with ancestors and collapses sections", async () => {
+  const original =
+    "# Parent\n\n" +
+    "intro\n\n".repeat(70) +
+    "## Child\n\nchild text\n\n### Grandchild\n\nend\n";
+  await fs.writeFile(file("notes/welcome.md"), original);
+  await open("notes/welcome.md");
+  await page.getByRole("button", { name: "Show outline", exact: true }).click();
+  const outline = page.getByRole("complementary", { name: "Document outline" });
+  const child = outline.getByRole("button", { name: /^Child, line/ });
+  await child.click();
+  await expect(child).toHaveAttribute("aria-current", "location");
+  await outline
+    .getByRole("button", { name: "Collapse Parent", exact: true })
+    .click();
+  await expect(child).toHaveCount(0);
+  await outline.getByLabel("Filter outline").fill("Grandchild");
+  await expect(
+    outline.getByRole("button", { name: /^Parent, line/ }),
+  ).toBeVisible();
+  await expect(
+    outline.getByRole("button", { name: /^Grandchild, line/ }),
+  ).toBeVisible();
+  await outline.getByLabel("Filter outline").fill("missing");
+  await expect(outline).toContainText("No matching headings");
+  await outline.getByLabel("Filter outline").fill("");
+  await outline
+    .getByRole("button", { name: "Expand Parent", exact: true })
+    .click();
+  await page
+    .locator(".editor-pane.active .document-scroll")
+    .evaluate((element) => (element.scrollTop = 0));
+  await expect(
+    outline.getByRole("button", { name: /^Parent, line/ }),
+  ).toHaveAttribute("aria-current", "location");
+  await page
+    .getByRole("button", { name: "Markdown source mode", exact: true })
+    .click();
+  await child.click();
+  await expect(child).toHaveAttribute("aria-current", "location");
+  await page.screenshot({ path: "test-results/p2-qol-outline.png" });
+  expect(await disk("notes/welcome.md")).toBe(original);
+  await expect(page.locator(".save-state")).toContainText("Saved");
+  expect(errors).toEqual([]);
+});
+
+test("P2 QoL tabs reorder by dragging and keyboard menu, pin across restart and survive bulk close", async () => {
+  await open("notes/welcome.md");
+  await open("notes/other.md");
+  await open("src/example.py");
+  const tab = (name) => page.locator(`.editor-tab[data-tooltip="${name}"]`);
+  await tab("src/example.py").dragTo(tab("notes/welcome.md"));
+  await expect(page.locator(".editor-tab").first()).toHaveAttribute(
+    "data-tooltip",
+    "src/example.py",
+  );
+  await tab("notes/other.md").click({ button: "right" });
+  await menuAction("Pin tab");
+  await expect(page.locator(".editor-tab").first()).toHaveAttribute(
+    "data-tooltip",
+    "notes/other.md",
+  );
+  await expect(tab("notes/other.md")).toHaveClass(/pinned/);
+  await tab("notes/welcome.md").focus();
+  await page.keyboard.press("Shift+F10");
+  await menuAction("Move tab left");
+  await expect(page.locator(".editor-tab").nth(1)).toHaveAttribute(
+    "data-tooltip",
+    "notes/welcome.md",
+  );
+  await expect
+    .poll(
+      async () =>
+        JSON.parse(await fs.readFile(path.join(data, "state.json"), "utf8"))
+          .sessions[root]?.tabs[0]?.pinned,
+    )
+    .toBe(true);
+  await app.evaluate(({ app }) => app.exit());
+  await app.close().catch(() => {});
+  await launch();
+  const pinned = page.locator('.editor-tab[data-tooltip="notes/other.md"]');
+  await expect(pinned).toHaveClass(/pinned/);
+  await pinned.click({ button: "right" });
+  await menuAction("Close all tabs");
+  await expect(page.locator(".editor-tab")).toHaveCount(1);
+  await expect(pinned).toBeVisible();
+  await pinned.click({ button: "right" });
+  await menuAction("Unpin tab");
+  await expect(pinned).not.toHaveClass(/pinned/);
+  await app.evaluate(({ BrowserWindow }) =>
+    BrowserWindow.getAllWindows()[0].setSize(1000, 700),
+  );
+  const names = Array.from(
+    { length: 12 },
+    (_, index) => `notes/qol-visible-tab-${String(index).padStart(2, "0")}.md`,
+  );
+  await Promise.all(
+    names.map((name) => fs.writeFile(file(name), "# Tab view\n")),
+  );
+  for (const name of names) {
+    await expect(
+      page.getByRole("treeitem", { name, exact: true }),
+    ).toBeVisible();
+    await open(name);
+  }
+  const inView = () =>
+    page.locator(".editor-tab.active").evaluate((element) => {
+      const rect = element.getBoundingClientRect(),
+        parent = element.closest(".tabs-scroll").getBoundingClientRect();
+      return rect.left >= parent.left - 1 && rect.right <= parent.right + 1;
+    });
+  await expect.poll(inView).toBe(true);
+  await page.keyboard.press(shortcut + "+p");
+  await page
+    .getByLabel("Search files", { exact: true })
+    .fill("qol-visible-tab-00.md");
+  await page.keyboard.press("Enter");
+  await expect(page.locator(".editor-tab.active")).toHaveAttribute(
+    "data-tooltip",
+    names[0],
+  );
+  await expect.poll(inView).toBe(true);
+  expect(errors).toEqual([]);
+});
+
+test("P2 QoL link picker uses dirty headings, duplicate anchors and encoded filenames without losing selection", async () => {
+  const target = "notes/section space.md";
+  await fs.writeFile(
+    file(target),
+    "# Target\n\n## Repeat\n\nFirst\n\n## Repeat\n\nSecond\n",
+  );
+  await expect(
+    page.getByRole("treeitem", { name: target, exact: true }),
+  ).toBeVisible();
+  await open(target);
+  await page
+    .getByRole("button", { name: "Markdown source mode", exact: true })
+    .click();
+  await sourceFill(
+    "# Target\n\n## Repeat\n\nFirst\n\n## Repeat\n\nSecond\n\n## Unsaved heading\n",
+  );
+  await open("notes/welcome.md");
+  const editor = page.locator(".editor-pane.active .document-content");
+  await editor.locator("strong").filter({ hasText: "ideas" }).dblclick();
+  await page.keyboard.press(shortcut + "+k");
+  await page
+    .getByRole("button", { name: "Choose file or section", exact: true })
+    .click();
+  await page.getByRole("button", { name: "Toggle theme", exact: true }).click();
+  const picker = page.getByRole("region", { name: "Workspace link picker" });
+  await picker.getByLabel("Find link file").fill("sectionspace");
+  await picker.getByRole("button", { name: target, exact: true }).click();
+  await expect(
+    picker.getByRole("button", { name: "Unsaved heading", exact: true }),
+  ).toBeVisible();
+  await picker
+    .getByRole("button", { name: "Repeat", exact: true })
+    .nth(1)
+    .click();
+  await expect(
+    page.getByLabel("Link destination", { exact: true }),
+  ).toHaveValue("/notes/section%20space.md#repeat-1");
+  await page.screenshot({ path: "test-results/p2-qol-link-picker.png" });
+  await page.getByRole("button", { name: "Apply link", exact: true }).click();
+  const link = editor.locator('a[href="/notes/section%20space.md#repeat-1"]');
+  await expect(link).toHaveText("ideas");
+  await save();
+  expect(await disk("notes/welcome.md")).toContain(
+    "[**ideas**](/notes/section%20space.md#repeat-1)",
+  );
+  expect(await disk(target)).not.toContain("Unsaved heading");
+  await link.click({ modifiers: [shortcut] });
+  await expect(page.locator(".editor-tab.active")).toHaveAttribute(
+    "data-tooltip",
+    target,
+  );
+  expect(errors).toEqual([]);
+});
+
+test("P2 QoL explorer supports roving arrows, parent navigation, typeahead and keyboard context menus", async () => {
+  const tree = page.getByRole("tree", { name: "Workspace files" }),
+    notes = tree.getByRole("treeitem", { name: "notes", exact: true });
+  await notes.focus();
+  await page.keyboard.press("ArrowLeft");
+  await expect(notes).toHaveAttribute("aria-expanded", "false");
+  await page.keyboard.press("ArrowRight");
+  await expect(notes).toHaveAttribute("aria-expanded", "true");
+  await page.keyboard.press("ArrowRight");
+  await expect(
+    tree.getByRole("treeitem", { name: "notes/other.md", exact: true }),
+  ).toBeFocused();
+  await page.keyboard.press("ArrowDown");
+  await expect(
+    tree.getByRole("treeitem", { name: "notes/welcome.md", exact: true }),
+  ).toBeFocused();
+  await page.keyboard.press("ArrowLeft");
+  await expect(notes).toBeFocused();
+  await page.keyboard.press("End");
+  await page.keyboard.press("Home");
+  await expect(tree.getByRole("treeitem").first()).toBeFocused();
+  await page.keyboard.type("src");
+  await expect(
+    tree.getByRole("treeitem", { name: "src", exact: true }),
+  ).toBeFocused();
+  await page.keyboard.press("ArrowRight");
+  await page.keyboard.press("ArrowRight");
+  const focused = tree.locator('[role="treeitem"]:focus');
+  await expect(focused).toHaveAttribute("aria-label", /^src\//);
+  await page.keyboard.press("Shift+F10");
+  await expect(
+    page.getByRole("menuitem", { name: "Open terminal here", exact: true }),
+  ).toBeVisible();
+  await page.keyboard.press("Escape");
+  await page.keyboard.press("Enter");
+  await expect(page.locator(".editor-tab.active")).toBeVisible();
+  expect(errors).toEqual([]);
+});
+
+test("P2 QoL terminal starts in the clicked directory with confined working paths", async () => {
+  await page
+    .getByRole("treeitem", { name: "src/example.py", exact: true })
+    .click({ button: "right" });
+  await menuAction("Open terminal here");
+  await expect(page.locator(".terminal-tabs>div")).toHaveCount(1);
+  const input = page.locator(".terminal-view.active .xterm-helper-textarea");
+  await input.focus();
+  const command =
+    process.platform === "win32"
+      ? "Set-Content -Path cwd-proof.txt -Value 'chosen directory'"
+      : "printf 'chosen directory' > cwd-proof.txt";
+  await page.keyboard.type(command);
+  await page.keyboard.press("Enter");
+  await expect
+    .poll(() => diskWhenPresent("src/cwd-proof.txt").catch(() => ""))
+    .toContain("chosen directory");
+  await expect(page.locator(".terminal-tabs")).toContainText("src");
+  const refused = await page.evaluate(async () => {
+    try {
+      await window.margin.terminalCreate("", "../");
+      return false;
+    } catch {
+      return true;
+    }
+  });
+  expect(refused).toBe(true);
+  expect(errors).toEqual([]);
+});
+
+test("P2 QoL conflicts highlight aligned line changes, synchronize scrolling and retain both versions", async () => {
+  const original =
+    Array.from({ length: 80 }, (_, index) => `line ${index}`).join("\n") + "\n";
+  await fs.writeFile(file("src/example.py"), original);
+  await open("src/example.py");
+  const mine = original
+    .replace("line 0", "long " + "x".repeat(700))
+    .replace("line 2", "mine 2")
+    .replace("line 60", "mine 60");
+  await sourceFill(mine);
+  await page.getByRole("button", { name: "Toggle theme", exact: true }).click();
+  const external = original
+    .replace("line 2", "external 2")
+    .replace("line 20", "inserted\nline 20");
+  await fs.writeFile(file("src/example.py"), external);
+  await expect(
+    page.locator(".editor-pane.active .conflict-banner"),
+  ).toBeVisible();
+  await page
+    .getByRole("button", { name: "Review changes", exact: true })
+    .click();
+  const dialog = page.getByRole("dialog", {
+    name: "The file changed outside Margin",
+    exact: true,
+  });
+  await expect(dialog.locator(".diff-mine")).toContainText([
+    "mine 2",
+    "mine 60",
+  ]);
+  await expect(dialog.locator(".diff-disk")).toContainText([
+    "external 2",
+    "inserted",
+    "line 60",
+  ]);
+  const panes = dialog.locator(".diff-scroll");
+  await panes.first().evaluate((element) => (element.scrollLeft = 300));
+  await expect
+    .poll(() => panes.first().evaluate((element) => element.scrollLeft))
+    .toBe(300);
+  await expect
+    .poll(() => panes.nth(1).evaluate((element) => element.scrollLeft))
+    .toBe(0);
+  await panes.first().evaluate((element) => (element.scrollLeft = 0));
+  await panes.first().evaluate((element) => (element.scrollTop = 500));
+  await expect
+    .poll(() => panes.nth(1).evaluate((element) => element.scrollTop))
+    .toBe(500);
+  await panes.nth(1).evaluate(element=>element.scrollTop=300);
+  await expect.poll(()=>panes.first().evaluate(element=>element.scrollTop)).toBe(300);
+  await panes.first().evaluate((element) => (element.scrollTop = 0));
+  await expect
+    .poll(() => panes.nth(1).evaluate((element) => element.scrollTop))
+    .toBe(0);
+  await page.screenshot({ path: "test-results/p2-qol-conflicts.png" });
+  await dialog
+    .getByRole("button", { name: "Keep reviewing", exact: true })
+    .click();
+  await expect(page.locator(".editor-pane.active .cm-content")).toContainText(
+    "mine 2",
+  );
+  expect(await disk("src/example.py")).toBe(external);
+  expect(errors).toEqual([]);
+});
+
+test("P3 QoL reading settings apply without edits and persist across restart", async () => {
+  const original = await disk("notes/welcome.md");
+  await open("notes/welcome.md");
+  await page.getByRole("button", { name: "Preferences", exact: true }).click();
+  await page
+    .getByLabel("Reading font size", { exact: true })
+    .selectOption("22");
+  await page
+    .getByLabel("Reading line height", { exact: true })
+    .selectOption("2.25");
+  await page
+    .getByLabel("Reading text width", { exact: true })
+    .selectOption("960");
+  await page
+    .getByRole("button", { name: "Close preferences", exact: true })
+    .click();
+  const metrics = () =>
+    page
+      .locator(".editor-pane.active .document-content")
+      .evaluate((element) => {
+        const style = getComputedStyle(element);
+        return {
+          font: style.fontSize,
+          height: style.lineHeight,
+          width: style.maxWidth,
+        };
+      });
+  await expect
+    .poll(metrics)
+    .toEqual({ font: "22px", height: "49.5px", width: "960px" });
+  await expect(page.locator(".save-state")).toContainText("Saved");
+  expect(await disk("notes/welcome.md")).toBe(original);
+  await expect
+    .poll(
+      async () =>
+        JSON.parse(await fs.readFile(path.join(data, "state.json"), "utf8"))
+          .sessions[root]?.active,
+    )
+    .toBe("notes/welcome.md");
+  const concurrent = await page.evaluate(async () => {
+    await Promise.all([
+      window.margin.settings({ historyLimitMB: 50 }),
+      window.margin.settings({ readingWidth: 1100 }),
+    ]);
+    const saved = await window.margin.settings({});
+    return { width: saved.readingWidth, limit: saved.historyLimitMB };
+  });
+  expect(concurrent).toEqual({ width: 1100, limit: 50 });
+  await app.evaluate(({ app }) => app.exit());
+  await app.close().catch(() => {});
+  await launch();
+  await expect
+    .poll(metrics)
+    .toEqual({ font: "22px", height: "49.5px", width: "1100px" });
+  expect(errors).toEqual([]);
+});
+
+test("P3 QoL local history compares saved versions, checkpoints dirty text and restores without overwriting disk", async () => {
+  const name = "notes/welcome.md",
+    original = await disk(name);
+  await open(name);
+  await page
+    .getByRole("button", { name: "Markdown source mode", exact: true })
+    .click();
+  await sourceFill("# Second version\n");
+  await save();
+  await sourceFill("# Third version\n");
+  await save();
+  const versions = await page.evaluate(
+    (name) => window.margin.historyList(name),
+    name,
+  );
+  expect(versions).toHaveLength(2);
+  const oldest = versions.at(-1).id;
+  await sourceFill("# Unsaved before restore\n");
+  await page
+    .getByRole("button", { name: "Local version history", exact: true })
+    .click();
+  const history = page.getByRole("dialog", {
+    name: "Local version history",
+    exact: true,
+  });
+  await history
+    .getByLabel("Saved version", { exact: true })
+    .selectOption(oldest);
+  await expect(
+    history.getByRole("region", { name: "Current editor contents" }),
+  ).toContainText("Unsaved before restore");
+  await expect(
+    history.getByRole("region", { name: "Selected saved version" }),
+  ).toContainText("A quieter workspace");
+  await page.screenshot({ path: "test-results/p3-history.png" });
+  await history
+    .getByRole("button", { name: "Restore to editor", exact: true })
+    .click();
+  await expect(history).toHaveCount(0);
+  await expect(page.locator(".editor-pane.active .cm-content")).toContainText(
+    "A quieter workspace",
+  );
+  await expect(page.locator(".save-state")).toContainText("Unsaved");
+  expect(await disk(name)).toBe("# Third version\n");
+  const checkpoint = await page.evaluate(async (name) => {
+    const list = await window.margin.historyList(name);
+    return window.margin.historyRead(name, list[0].id);
+  }, name);
+  expect(checkpoint).toBe("# Unsaved before restore\n");
+  await save();
+  expect(await disk(name)).toBe(original);
+  await move(name, "archive/welcome.md");
+  await page
+    .getByRole("button", { name: "Local version history", exact: true })
+    .click();
+  await expect(
+    page
+      .getByRole("dialog", { name: "Local version history", exact: true })
+      .getByLabel("Saved version", { exact: true }),
+  ).toContainText("Before restoring");
+  expect(errors).toEqual([]);
+});
+
+test("P3 QoL slash menu inserts blocks by keyboard, supports undo and ignores code and inline paths", async () => {
+  await fs.writeFile(file("notes/welcome.md"), "");
+  await open("notes/welcome.md");
+  const editor = page.locator(".editor-pane.active .document-content");
+  await editor.click();
+  await page.keyboard.type("/");
+  const menu = page.getByRole("listbox", { name: "Insert block", exact: true });
+  await expect(menu.getByRole("option")).toHaveCount(11);
+  for (let index = 0; index < 8; index++)
+    await page.keyboard.press("ArrowDown");
+  const codeOption = menu.getByRole("option", {
+    name: "Insert code block",
+    exact: true,
+  });
+  await expect(codeOption).toHaveAttribute("aria-selected", "true");
+  await expect
+    .poll(() =>
+      codeOption.evaluate((element) => {
+        const row = element.getBoundingClientRect(),
+          list = element.parentElement.getBoundingClientRect();
+        return row.top >= list.top && row.bottom <= list.bottom;
+      }),
+    )
+    .toBe(true);
+  await page.screenshot({ path: "test-results/p3-slash-menu.png" });
+  await page.keyboard.press("Escape");
+  await page.keyboard.press(shortcut + "+a");
+  await page.keyboard.insertText("/heading");
+  await expect(menu.getByRole("option")).toHaveCount(3);
+  await page.keyboard.press("ArrowDown");
+  await page.keyboard.press("Enter");
+  await page.keyboard.type("Slash heading");
+  await expect(editor.locator("h2")).toHaveText("Slash heading");
+  await page.keyboard.press("Enter");
+  await page.keyboard.type("/table");
+  await expect(
+    menu.getByRole("option", { name: "Insert table", exact: true }),
+  ).toBeVisible();
+  await page.keyboard.press("Enter");
+  await expect(editor.locator("table")).toHaveCount(1);
+  await expect(editor.locator("table tr")).toHaveCount(3);
+  await page.keyboard.press(shortcut + "+z");
+  await expect(editor.locator("table")).toHaveCount(0);
+  await expect(editor).toContainText("/table");
+  await page.keyboard.press("Escape");
+  await expect(menu).toHaveCount(0);
+  await page.keyboard.press(shortcut + "+a");
+  await page.keyboard.insertText("/code");
+  await expect(
+    menu.getByRole("option", { name: "Insert code block", exact: true }),
+  ).toBeVisible();
+  await page.keyboard.press("Enter");
+  await page.keyboard.type("/table");
+  await expect(menu).toHaveCount(0);
+  await expect(editor.locator("pre")).toContainText("/table");
+  await save();
+  expect(await disk("notes/welcome.md")).toContain("```");
+  expect(errors).toEqual([]);
+});
+
+test("P3 QoL slash image chooser preserves cancellation and inserts a real attachment", async () => {
+  await fs.writeFile(file("notes/welcome.md"), "");
+  await open("notes/welcome.md");
+  const editor = page.locator(".editor-pane.active .document-content");
+  await editor.click();
+  await page.keyboard.type("/image");
+  const menu = page.getByRole("listbox", { name: "Insert block", exact: true });
+  await expect(
+    menu.getByRole("option", { name: "Insert image", exact: true }),
+  ).toBeVisible();
+  await app.evaluate(({ dialog }) => {
+    globalThis.__slashChooserCalls = 0;
+    dialog.showOpenDialog = async () => {
+      globalThis.__slashChooserCalls++;
+      return { canceled: true, filePaths: [] };
+    };
+  });
+  await page.keyboard.press("Enter");
+  await expect
+    .poll(() => app.evaluate(() => globalThis.__slashChooserCalls))
+    .toBe(1);
+  await expect(menu).toHaveAttribute("aria-busy", "false");
+  await expect(editor).toContainText("/image");
+  const image = path.join(base, "slash.png");
+  await fs.writeFile(
+    image,
+    Buffer.from(
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aWQAAAABJRU5ErkJggg==",
+      "base64",
+    ),
+  );
+  await app.evaluate(({ dialog }, file) => {
+    dialog.showOpenDialog = async () => ({
+      canceled: false,
+      filePaths: [file],
+    });
+  }, image);
+  await editor.click();
+  await page.keyboard.press("End");
+  await expect(
+    menu.getByRole("option", { name: "Insert image", exact: true }),
+  ).toBeVisible();
+  await page.keyboard.press("Enter");
+  await expect(editor.locator("img[src]")).toHaveCount(1);
+  await save();
+  expect(await disk("notes/welcome.md")).toContain("![Image]");
+  expect(await fs.readdir(file("assets"))).toHaveLength(1);
+  expect(errors).toEqual([]);
+});
+
+test("P3 QoL multi-selection cancels safely and batch moves preserve links between moved notes", async () => {
+  const before = await disk("notes/welcome.md");
+  await open("notes/welcome.md");
+  await page
+    .getByRole("treeitem", { name: "notes/other.md", exact: true })
+    .click({ modifiers: [shortcut] });
+  await expect(page.getByRole("treeitem", { selected: true })).toHaveCount(2);
+  await expect(
+    page.getByRole("tree", { name: "Workspace files" }),
+  ).toHaveAttribute("aria-multiselectable", "true");
+  await page
+    .getByRole("button", { name: "Move selected items", exact: true })
+    .click();
+  await page.getByRole("button", { name: "Cancel", exact: true }).click();
+  expect(await disk("notes/welcome.md")).toBe(before);
+  await page
+    .getByRole("button", { name: "Move selected items", exact: true })
+    .click();
+  await page
+    .getByLabel("Destination folder (empty = workspace root)", { exact: true })
+    .fill("archive");
+  await page
+    .getByRole("button", { name: "Move & update links", exact: true })
+    .click();
+  await expect(
+    page.getByRole("treeitem", { name: "archive/welcome.md", exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("treeitem", { name: "notes/welcome.md", exact: true }),
+  ).toHaveCount(0);
+  expect(await disk("archive/welcome.md")).toBe(before);
+  expect(await disk("archive/other.md")).toContain(
+    "welcome.md#small-beginnings",
+  );
+  expect(await disk("archive/other.md")).not.toContain("../notes");
+  expect(await disk("index.md")).toContain("archive/welcome.md");
+  await expect(page.locator(".editor-tab.active")).toHaveAttribute(
+    "data-tooltip",
+    "archive/welcome.md",
+  );
+  expect(errors).toEqual([]);
+});
+
+test("P3 QoL selection keyboard ranges and Trash preflight retain failed items and warn about incoming references", async () => {
+  await fs.writeFile(file("notes/a.md"), "# A");
+  await fs.writeFile(file("notes/b.md"), "# B");
+  await fs.writeFile(file("index.md"), "[a](notes/a.md) [b](notes/b.md)");
+  const a = page.getByRole("treeitem", { name: "notes/a.md", exact: true }),
+    b = page.getByRole("treeitem", { name: "notes/b.md", exact: true });
+  await expect(a).toBeVisible();
+  await a.click();
+  await a.focus();
+  await page.keyboard.press("Shift+ArrowDown");
+  await expect(page.getByRole("treeitem", { selected: true })).toHaveCount(2);
+  await expect(b).toBeFocused();
+  await page.keyboard.press("Delete");
+  const confirm = page.getByRole("dialog", {
+    name: "Move 2 selected items to Trash?",
+    exact: true,
+  });
+  await expect(confirm).toContainText("index.md");
+  await confirm.getByRole("button", { name: "Cancel", exact: true }).click();
+  expect(await disk("notes/a.md")).toBe("# A");
+  await app.evaluate(
+    async ({ shell }, target) => {
+      const fs = process.getBuiltinModule("fs").promises;
+      shell.trashItem = async (file) => {
+        if (file.endsWith("b.md")) throw new Error("fixture locked file");
+        await fs.rename(file, target);
+      };
+    },
+    path.join(base, "trashed-a.md"),
+  );
+  await page
+    .getByRole("button", { name: "Trash selected items", exact: true })
+    .click();
+  await page
+    .getByRole("button", { name: "Move selection to Trash", exact: true })
+    .click();
+  await expect(a).toHaveCount(0);
+  await expect(b).toBeVisible();
+  await expect(page.getByRole("alert")).toContainText("fixture locked file");
+  expect(await disk("notes/b.md")).toBe("# B");
+  expect(await fs.readFile(path.join(base, "trashed-a.md"), "utf8")).toBe(
+    "# A",
+  );
+  expect(errors).toEqual([]);
+});
+
+test("P3 QoL split documents edit and scroll independently, restore across restart and keep tabs on closing split", async () => {
+  const a = "# Left\n\n" + "Left paragraph.\n\n".repeat(120),
+    b = "# Right\n\n" + "Right paragraph.\n\n".repeat(120);
+  await fs.writeFile(file("notes/welcome.md"), a);
+  await fs.writeFile(file("notes/other.md"), b);
+  await open("notes/welcome.md");
+  await open("notes/other.md");
+  await page
+    .locator('.editor-tab[data-tooltip="notes/welcome.md"]')
+    .click({ button: "right" });
+  await menuAction("Open beside current");
+  await expect(page.locator(".editor-pane.split-visible")).toHaveCount(2);
+  let left = page.locator('.editor-pane[data-path="notes/other.md"]'),
+    right = page.locator('.editor-pane[data-path="notes/welcome.md"]');
+  await left.locator("h1").click();
+  await page.keyboard.press(
+    process.platform === "darwin" ? "Meta+ArrowRight" : "End",
+  );
+  await page.keyboard.type(" edited");
+  await right.locator("h1").click();
+  await page.keyboard.press(
+    process.platform === "darwin" ? "Meta+ArrowRight" : "End",
+  );
+  await page.keyboard.type(" edited");
+  await page.keyboard.press(shortcut + "+Shift+s");
+  await expect
+    .poll(() => diskWhenPresent("notes/other.md"))
+    .toContain("# Right edited");
+  await expect
+    .poll(() => diskWhenPresent("notes/welcome.md"))
+    .toContain("# Left edited");
+  await page
+    .getByRole("button", { name: "Markdown source mode", exact: true })
+    .click();
+  await expect(right.locator(".cm-content")).toBeVisible();
+  await expect(left.locator(".document-content")).toBeVisible();
+  await left
+    .locator(".document-scroll")
+    .evaluate((element) => (element.scrollTop = 350));
+  await right
+    .locator(".cm-scroller")
+    .evaluate((element) => (element.scrollTop = 750));
+  await expect
+    .poll(() =>
+      left.locator(".document-scroll").evaluate((element) => element.scrollTop),
+    )
+    .toBe(350);
+  await expect
+    .poll(async () => {
+      const saved = JSON.parse(
+        await fs.readFile(path.join(data, "state.json"), "utf8"),
+      ).sessions[root];
+      return (
+        !!saved?.split &&
+        saved.tabs.find((tab) => tab.path === "notes/other.md")?.position
+          ?.scrollTop
+      );
+    })
+    .toBe(350);
+  await app.evaluate(({ app }) => app.exit());
+  await app.close().catch(() => {});
+  await launch();
+  left = page.locator('.editor-pane[data-path="notes/other.md"]');
+  right = page.locator('.editor-pane[data-path="notes/welcome.md"]');
+  await expect(page.locator(".editor-pane.split-visible")).toHaveCount(2);
+  await expect
+    .poll(() =>
+      left.locator(".document-scroll").evaluate((element) => element.scrollTop),
+    )
+    .toBe(350);
+  await expect
+    .poll(() =>
+      right
+        .locator(".cm-scroller")
+        .evaluate((element) => Math.abs(element.scrollTop - 750)),
+    )
+    .toBeLessThan(2);
+  await page.screenshot({ path: "test-results/p3-split.png" });
+  await page
+    .getByRole("button", { name: "Close split view", exact: true })
+    .click();
+  await expect(page.locator(".editor-area")).not.toHaveClass(/split/);
+  await expect(page.locator(".editor-tab")).toHaveCount(2);
+  expect(errors).toEqual([]);
+});
+
+test("P3 QoL split mode routes new documents into the focused pane and preserves reference files through moves", async () => {
+  await open("notes/welcome.md");
+  await page.getByRole("button", { name: "Split editor", exact: true }).click();
+  await expect(
+    page.getByRole("dialog", { name: "Quick open", exact: true }),
+  ).toContainText("CHOOSE A SECOND DOCUMENT");
+  await page.keyboard.press("Escape");
+  await page.keyboard.press(shortcut + "+p");
+  await page.getByLabel("Search files", { exact: true }).fill("other.md");
+  await page.keyboard.press("Enter");
+  await expect(page.locator(".editor-tab.active")).toHaveAttribute(
+    "data-tooltip",
+    "notes/other.md",
+  );
+  await expect(page.locator(".editor-area")).not.toHaveClass(/split/);
+  await page
+    .getByRole("button", { name: "Close other.md", exact: true })
+    .click();
+  await page.getByRole("button", { name: "Split editor", exact: true }).click();
+  await page.getByLabel("Search files", { exact: true }).fill("other.md");
+  await page.keyboard.press("Enter");
+  await expect(page.locator(".editor-pane.split-visible")).toHaveCount(2);
+  const other = page.locator('.editor-pane[data-path="notes/other.md"]');
+  await other.locator(".document-content").click();
+  await page.keyboard.press(shortcut + "+p");
+  await page.getByLabel("Search files", { exact: true }).fill("index.md");
+  await page.keyboard.press("Enter");
+  await expect(page.locator('.editor-pane[data-path="index.md"]')).toHaveClass(
+    /split-visible/,
+  );
+  await expect(
+    page.locator('.editor-pane[data-path="notes/welcome.md"]'),
+  ).toHaveClass(/split-visible/);
+  await expect(other).not.toHaveClass(/split-visible/);
+  await move("notes/welcome.md", "archive/welcome.md");
+  await expect(
+    page.locator('.editor-pane[data-path="archive/welcome.md"]'),
+  ).toHaveClass(/split-visible/);
+  await expect(page.locator('.editor-pane[data-path="index.md"]')).toHaveClass(
+    /split-visible/,
+  );
+  expect(await disk("index.md")).toContain("archive/welcome.md");
   expect(errors).toEqual([]);
 });
