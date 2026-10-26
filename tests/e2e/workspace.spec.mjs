@@ -3399,6 +3399,137 @@ test("P2 QoL terminal starts in the clicked directory with confined working path
   expect(errors).toEqual([]);
 });
 
+test("Compare files highlights HTML exercise and solution without opening or formatting them", async () => {
+  const lines = [
+    '<!doctype html>', '<html lang="nl">', '<body>',
+    '<h1>Oefening</h2>',
+    '<p title="' + 'x'.repeat(700) + '">Lange regel</p>',
+    ...Array.from({ length: 85 }, (_, index) => `<p>Regel ${index}</p>`),
+    '<a href="verkeerd.html">Link</a>', '</body>', '</html>', '',
+  ];
+  const exercise = lines.join('\r\n');
+  const solution = lines.join('\n')
+    .replace('<h1>Oefening</h2>', '<h1>Oefening</h1>')
+    .replace('<p>Regel 40</p>', '<p>Toegevoegd</p>\n<p>Regel 40</p>')
+    .replace('verkeerd.html', 'juist.html');
+  await fs.writeFile(file('exercise.html'), exercise);
+  await fs.writeFile(file('solution.html'), solution);
+  await expect(page.getByRole('treeitem', { name: 'solution.html', exact: true })).toBeVisible();
+  await open('notes/welcome.md');
+  await page.getByRole('button', { name: 'Compare files', exact: true }).click();
+  const dialog = page.getByRole('dialog', { name: 'Compare files', exact: true });
+  await dialog.getByLabel('Left file (exercise)', { exact: true }).selectOption('exercise.html');
+  await dialog.getByLabel('Right file (solution)', { exact: true }).selectOption('solution.html');
+  const columns = dialog.locator('.conflict-columns section');
+  await expect(columns.first().locator('.diff-mine')).toContainText(['<h1>Oefening</h2>', 'verkeerd.html']);
+  await expect(columns.nth(1).locator('.diff-disk')).toContainText(['<h1>Oefening</h1>', 'Toegevoegd', 'juist.html']);
+  const gapIndex = await columns.first().locator('.diff-line').evaluateAll(rows => rows.findIndex(row => row.classList.contains('diff-gap')));
+  expect(gapIndex).toBeGreaterThan(0);
+  await expect(columns.nth(1).locator('.diff-line').nth(gapIndex)).toContainText('Toegevoegd');
+  await expect(dialog.getByRole('group', { name: 'Difference navigation' })).toContainText('1 / 3 differences');
+  await dialog.getByRole('button', { name: 'Next difference', exact: true }).click();
+  await expect(dialog.getByRole('group', { name: 'Difference navigation' })).toContainText('2 / 3 differences');
+  const panes = dialog.locator('.diff-scroll');
+  await expect.poll(() => panes.first().evaluate(el => el.scrollTop)).toBeGreaterThan(300);
+  await dialog.getByRole('button', { name: 'Previous difference', exact: true }).click();
+  await expect(dialog.getByRole('group', { name: 'Difference navigation' })).toContainText('1 / 3 differences');
+  await panes.first().evaluate(el => el.scrollTop = 500);
+  await expect.poll(() => panes.nth(1).evaluate(el => el.scrollTop)).toBe(500);
+  await panes.nth(1).evaluate(el => el.scrollTop = 200);
+  await expect.poll(() => panes.first().evaluate(el => el.scrollTop)).toBe(200);
+  await panes.first().evaluate(el => el.scrollLeft = 300);
+  await expect.poll(() => panes.first().evaluate(el => el.scrollLeft)).toBe(300);
+  await expect.poll(() => panes.nth(1).evaluate(el => el.scrollLeft)).toBe(0);
+  await dialog.getByRole('button', { name: 'Swap files', exact: true }).click();
+  await expect(dialog.getByLabel('Left file (exercise)', { exact: true })).toHaveValue('solution.html');
+  await expect(columns.first().locator('.diff-mine')).toContainText(['Toegevoegd']);
+  await dialog.getByRole('button', { name: 'Swap files', exact: true }).click();
+  await expect(dialog.getByLabel('Left file (exercise)', { exact: true })).toHaveValue('exercise.html');
+  await panes.first().evaluate(el => { el.scrollTop = 0; el.scrollLeft = 0; });
+  await page.screenshot({ path: 'test-results/compare-files.png' });
+  await dialog.getByLabel('Left file (exercise)', { exact: true }).selectOption('solution.html');
+  await expect(dialog.locator('.diff-summary')).toContainText('No differences');
+  await expect(dialog.getByRole('button', { name: 'Next difference', exact: true })).toBeDisabled();
+  await expect(columns.locator('.diff-line.diff-mine, .diff-line.diff-disk')).toHaveCount(0);
+  await expect(page.locator('.editor-tab')).toHaveCount(1);
+  await page.keyboard.press('Escape');
+  await expect(dialog).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Compare files', exact: true })).toBeFocused();
+  expect(await disk('exercise.html')).toBe(exercise);
+  expect(await disk('solution.html')).toBe(solution);
+  expect(errors).toEqual([]);
+});
+
+test("Compare files uses dirty split buffers, handles unavailable files and marks limited previews", async () => {
+  const exercise = 'start\nwrong\nend\n';
+  const solution = 'start\ncorrect\nend\n';
+  await fs.writeFile(file('exercise.txt'), exercise);
+  await fs.writeFile(file('solution.txt'), solution);
+  await expect(page.getByRole('treeitem', { name: 'solution.txt', exact: true })).toBeVisible();
+  await open('exercise.txt');
+  await open('solution.txt');
+  await sourceFill(solution.replace('correct', 'unsaved solution'));
+  const dialog = page.getByRole('dialog', { name: 'Compare files', exact: true });
+  await page.locator('.editor-tab[data-tooltip="exercise.txt"]').click({ button: 'right' });
+  await menuAction('Compare with current file');
+  await expect(dialog.getByLabel('Left file (exercise)', { exact: true })).toHaveValue('solution.txt');
+  await expect(dialog.locator('.diff-line.diff-mine')).toContainText(['unsaved solution']);
+  await dialog.getByRole('button', { name: 'Close comparison', exact: true }).click();
+  await page.locator('.editor-tab[data-tooltip="exercise.txt"]').click({ button: 'right' });
+  await menuAction('Open beside current');
+  await expect(page.locator('.editor-pane.split-visible')).toHaveCount(2);
+  await page.getByRole('button', { name: 'Compare files', exact: true }).click();
+  await expect(dialog.getByLabel('Left file (exercise)', { exact: true })).toHaveValue('solution.txt');
+  await expect(dialog.getByLabel('Right file (solution)', { exact: true })).toHaveValue('exercise.txt');
+  await expect(dialog.locator('.diff-line.diff-mine')).toContainText(['unsaved solution']);
+  await dialog.getByRole('button', { name: 'Close comparison', exact: true }).click();
+  await expect(page.locator('.editor-pane.split-visible')).toHaveCount(2);
+  await expect(page.locator('.editor-pane[data-path="solution.txt"] .cm-content')).toContainText('unsaved solution');
+  expect(await disk('solution.txt')).toBe(solution);
+  await page.locator('.editor-pane[data-path="solution.txt"] .cm-content').click();
+  await page.getByRole('treeitem', { name: 'exercise.txt', exact: true }).click({ button: 'right' });
+  await menuAction('Compare with current file');
+  await expect(dialog.getByLabel('Right file (solution)', { exact: true })).toHaveValue('exercise.txt');
+  await expect(dialog.locator('.diff-line.diff-mine')).toContainText(['unsaved solution']);
+  await dialog.getByRole('button', { name: 'Close comparison', exact: true }).click();
+
+  const huge = Array.from({ length: 5100 }, (_, i) => `line ${i}`).join('\n');
+  await fs.writeFile(file('large-left.txt'), huge);
+  await fs.writeFile(file('large-right.txt'), huge.replace('line 5099', 'different beyond preview'));
+  await fs.writeFile(file('unavailable.txt'), 'available');
+  await fs.writeFile(file('binary.dat'), Buffer.from([0, 1, 2, 3]));
+  await expect(page.getByRole('treeitem', { name: 'unavailable.txt', exact: true })).toBeVisible();
+  await page.getByRole('button', { name: 'Compare files', exact: true }).click();
+  await dialog.getByLabel('Left file (exercise)', { exact: true }).selectOption('large-left.txt');
+  await dialog.getByLabel('Right file (solution)', { exact: true }).selectOption('large-right.txt');
+  await expect(dialog).toContainText('Limited preview:');
+  await expect(dialog.locator('.diff-summary')).toContainText('No differences in preview');
+  await expect(dialog.locator('.diff-line')).toHaveCount(10000);
+  await dialog.getByLabel('Right file (solution)', { exact: true }).selectOption('unavailable.txt');
+  await expect(dialog.locator('.conflict-columns')).toContainText('available');
+  await fs.rm(file('unavailable.txt'));
+  await dialog.getByRole('button', { name: 'Refresh comparison', exact: true }).click();
+  await expect(dialog.getByRole('alert')).toContainText('unavailable.txt');
+  await expect(dialog.locator('.conflict-columns')).toHaveCount(0);
+  await dialog.getByLabel('Right file (solution)', { exact: true }).selectOption('binary.dat');
+  await expect(dialog.getByRole('alert')).toBeVisible();
+  await dialog.getByLabel('Right file (solution)', { exact: true }).selectOption('exercise.txt');
+  await expect(dialog.getByRole('alert')).toHaveCount(0);
+  await expect(dialog.locator('.conflict-columns')).toBeVisible();
+  await page.keyboard.press('Escape');
+  await page.getByRole('treeitem', { name: 'exercise.txt', exact: true }).click();
+  await page.getByRole('treeitem', { name: 'solution.txt', exact: true }).click({ modifiers: [shortcut] });
+  await page.getByRole('treeitem', { name: 'solution.txt', exact: true }).click({ button: 'right' });
+  await menuAction('Compare selected files');
+  await expect(dialog.getByLabel('Left file (exercise)', { exact: true })).toHaveValue('exercise.txt');
+  await expect(dialog.getByLabel('Right file (solution)', { exact: true })).toHaveValue('solution.txt');
+  await expect(dialog.locator('.diff-line.diff-disk')).toContainText(['unsaved solution']);
+  await page.keyboard.press('Escape');
+  expect(await disk('exercise.txt')).toBe(exercise);
+  expect(await disk('solution.txt')).toBe(solution);
+  expect(errors).toEqual([]);
+});
+
 test("P2 QoL conflicts highlight aligned line changes, synchronize scrolling and retain both versions", async () => {
   const original =
     Array.from({ length: 80 }, (_, index) => `line ${index}`).join("\n") + "\n";

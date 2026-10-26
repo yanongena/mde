@@ -2308,6 +2308,102 @@ kbd {
   margin: 8px 0;
   font-size: 11px;
 }
+.diff-summary,
+.diff-navigation {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+  font-size: 11px;
+}
+.diff-summary p {
+  margin: 8px 0;
+}
+.diff-navigation button {
+  padding: 5px 8px;
+  font-size: 11px;
+}
+.diff-current {
+  box-shadow: inset 3px 0 var(--accent);
+}
+.compare-scrim {
+  padding: 20px;
+}
+.action-dialog.compare-dialog {
+  width: 1400px;
+  max-width: 100%;
+  height: calc(100vh - 40px);
+  max-height: 100%;
+  display: flex;
+  flex-direction: column;
+  overflow: auto;
+}
+.compare-dialog .dialog-heading {
+  flex-shrink: 0;
+}
+.compare-files {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 12px;
+}
+.compare-files label {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 12px;
+}
+.compare-files select {
+  width: 100%;
+  min-width: 0;
+}
+.compare-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 12px 0;
+  font-size: 11px;
+}
+.compare-actions > span {
+  margin-right: auto;
+}
+.compare-actions > span > span {
+  padding: 3px 5px;
+  border-radius: 3px;
+}
+.compare-actions button {
+  font-size: 11px;
+  padding: 5px 8px;
+}
+.compare-dialog .conflict-diff {
+  flex: 1;
+  min-height: 160px;
+  display: flex;
+  flex-direction: column;
+}
+.compare-dialog .conflict-columns {
+  flex: 1;
+  min-height: 0;
+}
+.compare-dialog .conflict-columns section {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.compare-dialog .conflict-columns strong {
+  overflow-wrap: anywhere;
+  flex-shrink: 0;
+}
+.compare-dialog .diff-scroll {
+  flex: 1;
+  height: auto;
+  min-height: 0;
+}
+.compare-dialog .diff-scroll pre {
+  font-size: 12px;
+}
 .conflict-columns {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);

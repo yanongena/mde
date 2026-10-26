@@ -43,6 +43,7 @@ import {
   RotateCcw,
   Pin,
   Columns2,
+  FileDiff,
   History,
   Folder,
   PanelBottomClose,
@@ -66,6 +67,7 @@ import { isBrowserFile } from "../electron/browser-files.mjs";
 import { HistoryDialog } from "./components/HistoryDialog";
 import { PdfExportDialog } from "./components/PdfExportDialog";
 import { ConflictDiff } from "./components/ConflictDiff";
+import { CompareFilesDialog } from "./components/CompareFilesDialog";
 import { MoveDestinationPicker } from "./components/MoveDestinationPicker";
 import { useExplorerDrag } from "./components/useExplorerDrag";
 import { movePath, moveProblem } from "./lib/explorer-move";
@@ -188,6 +190,10 @@ export default function App() {
     setSplitState(next);
   };
   const [historyPath, setHistoryPath] = useState("");
+  const [comparison, setComparison] = useState<{
+    left: string;
+    right: string;
+  } | null>(null);
   const [selection, setSelection] = useState<string[]>([]);
   const selectionRef = useRef(selection);
   selectionRef.current = selection;
@@ -960,6 +966,15 @@ export default function App() {
     if (isReadOnlyPreview(name)) return;
     if (await openFile(name)) setHistoryPath(name);
   }
+  function compareFiles(right?: string, left?: string) {
+    const pair = splitRef.current;
+    const current = activeRef.current;
+    const textPath = (path: string) => isReadOnlyPreview(path) ? "" : path;
+    setComparison({
+      left: left ?? textPath(pair && !right ? pair.left : current),
+      right: right ?? textPath(pair?.right || ""),
+    });
+  }
   async function goHistory(direction: -1 | 1) {
     const previousIndex = navigation.current.index;
     const target = navigation.current.move(direction, currentLocation());
@@ -1323,6 +1338,22 @@ export default function App() {
         path !== activeRef.current
           ? [{ label: "Open beside current", run: () => openBeside(path) }]
           : []),
+        ...(path && !entry?.directory && !isReadOnlyPreview(path) &&
+        activeRef.current && path !== activeRef.current &&
+        !isReadOnlyPreview(activeRef.current)
+          ? [{
+              label: "Compare with current file",
+              run: () => compareFiles(path),
+            }]
+          : []),
+        ...(selectedPaths.length === 2 && selectedPaths.every((name) =>
+          entries.some((entry) => entry.path === name && !entry.directory) &&
+          !isReadOnlyPreview(name))
+          ? [{
+              label: "Compare selected files",
+              run: () => compareFiles(selectedPaths[1], selectedPaths[0]),
+            }]
+          : []),
         ...(selectedPaths.length > 1
           ? [
               {
@@ -1383,6 +1414,12 @@ export default function App() {
       restoreFocus: () => target.isConnected && target.focus(),
       items: [
         { label: "Open beside current", run: () => openBeside(path) },
+        {
+          label: "Compare with current file",
+          disabled: path === activeRef.current || isReadOnlyPreview(path) ||
+            isReadOnlyPreview(activeRef.current),
+          run: () => compareFiles(path),
+        },
         {
           label: "Local version history",
           disabled: isReadOnlyPreview(path),
@@ -2160,6 +2197,10 @@ export default function App() {
           {
             name: split ? "Close split view" : "Split editor",
             run: () => (split ? setSplit(null) : openBeside()),
+          },
+          {
+            name: "Compare files",
+            run: () => compareFiles(),
           },
           ...(!isReadOnlyPreview(current.path) ? [{
             name: "Local version history",
@@ -3193,6 +3234,16 @@ export default function App() {
                 <Columns2 />
               </button>
             )}
+            {root && (
+              <button
+                className="icon-button"
+                aria-label="Compare files"
+                data-tooltip="Compare files"
+                onClick={() => compareFiles()}
+              >
+                <FileDiff />
+              </button>
+            )}
             {current && !isReadOnlyPreview(current.path) && (
               <button
                 className="icon-button"
@@ -3741,6 +3792,15 @@ export default function App() {
             </div>
           </div>
         </div>
+      )}
+      {comparison && (
+        <CompareFilesDialog
+          initialLeft={comparison.left}
+          initialRight={comparison.right}
+          entries={entries}
+          tabs={tabs}
+          onClose={() => setComparison(null)}
+        />
       )}
       {historyPath && (
         <HistoryDialog
