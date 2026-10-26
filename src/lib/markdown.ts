@@ -1,3 +1,10 @@
+import { unified } from "unified";
+import remarkParse from "remark-parse";
+import remarkGfm from "remark-gfm";
+
+const markdownParser = unified().use(remarkParse).use(remarkGfm);
+const protectionCache = new Map<string, string | null>();
+
 export const isMarkdown = (name: string) =>
   /\.(md|markdown|mdown)$/i.test(name);
 export const isImage = (name: string) =>
@@ -19,37 +26,53 @@ export function splitMetadata(text: string) {
   };
 }
 export function visualProtection(text: string): string | null {
+  if (protectionCache.has(text)) return protectionCache.get(text)!;
   const { body } = splitMetadata(text);
-  // HTML in a fenced or inline code example is literal code. The Markdown
-  // serializer also uses the standard <br> spelling for a table-cell break.
-  let fence = "",
-    fenceLength = 0;
-  const inspected = body
-    .split("\n")
-    .map((line) => {
-      const match = line.match(/^ {0,3}(`{3,}|~{3,})/);
-      if (match) {
-        if (!fence) {
-          fence = match[1][0];
-          fenceLength = match[1].length;
-        } else if (match[1][0] === fence && match[1].length >= fenceLength)
-          fence = "";
-        return "";
-      }
-      return fence ? "" : line;
-    })
-    .join("\n")
-    .replace(/(`+)[\s\S]*?\1/g, "")
-    .replace(/<br\s*\/?>/gi, "");
+  // Parse Markdown so code examples and <angle-bracket link destinations>
+  // cannot be mistaken for embedded HTML. Keep line breaks for the checks below.
+  const tree = markdownParser.parse(body);
+  const parts: string[] = [];
+  let cursor = 0,
+    html = false,
+    definitions = false;
+  const visit = (node: typeof tree | (typeof tree.children)[number]): void => {
+    if (node.type === "code" || node.type === "inlineCode") {
+      const from = node.position?.start.offset ?? cursor;
+      const to = node.position?.end.offset ?? from;
+      parts.push(
+        body.slice(cursor, from),
+        body.slice(from, to).replace(/[^\r\n]/g, " "),
+      );
+      cursor = to;
+      return;
+    }
+    // The visual serializer uses <br> for table-cell line breaks.
+    if (node.type === "html" && node.value.replace(/<br\s*\/?>/gi, "").trim())
+      html = true;
+    if (node.type === "definition" || node.type === "footnoteDefinition")
+      definitions = true;
+    if ("children" in node) node.children.forEach(visit);
+  };
+  visit(tree);
+  parts.push(body.slice(cursor));
+  const inspected = parts.join("");
   // Never interpret raw HTML or unsupported extensions as an editable rich document.
   const checks: [RegExp, string][] = [
-    [/<\/?[A-Za-z][A-Za-z\d-]*(?:\s[^>]*|\s*\/?)>|<!--/m, "embedded HTML"],
-    [/^ {0,3}\[[^\]]+\]:/m, "reference definitions or footnotes"],
     [/!?\[\[/, "wiki links"],
     [/^\$\$|\$[^\s$][^$]*\$/m, "mathematical notation"],
     [/^:::/m, "custom Markdown directives"],
   ];
-  return checks.find(([test]) => test.test(inspected))?.[1] || null;
+  const reason = html
+    ? "embedded HTML"
+    : definitions
+      ? "reference definitions or footnotes"
+      : checks.find(([test]) => test.test(inspected))?.[1] || null;
+  if (text.length <= 2_000_000) {
+    if (protectionCache.size >= 8)
+      protectionCache.delete(protectionCache.keys().next().value!);
+    protectionCache.set(text, reason);
+  }
+  return reason;
 }
 export function assetURL(documentPath: string, src: string) {
   if (

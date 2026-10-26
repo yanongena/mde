@@ -15,7 +15,7 @@ export function documentMode(
   text: string,
   preferred?: "visual" | "source",
 ): "visual" | "source" {
-  if (!supportsVisualMode(path) || (isMarkdown(path) && visualProtection(text)))
-    return "source";
+  if (!supportsVisualMode(path)) return "source";
+  if (isMarkdown(path) && visualProtection(text)) return preferred ?? "source";
   return preferred ?? (isMarkdown(path) ? "visual" : "source");
 }

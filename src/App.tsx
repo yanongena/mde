@@ -74,6 +74,7 @@ import { movePath, moveProblem } from "./lib/explorer-move";
 import { quickFiles, parseFileQuery, lineOffset } from "./lib/quick-open";
 import { ImagePreview } from "./components/ImagePreview";
 import { HtmlPreview } from "./components/HtmlPreview";
+import { MarkdownPreview } from "./components/MarkdownPreview";
 import {
   documentMode,
   previewType,
@@ -860,7 +861,7 @@ export default function App() {
         else {
           const doc = await window.margin.read(name);
           if (token !== navigationToken.current) return false;
-          const protection = visualProtection(doc.text);
+          const protection = isMarkdown(name) ? visualProtection(doc.text) : null;
           tab = {
             ...doc,
             baseline: doc.text,
@@ -1076,7 +1077,8 @@ export default function App() {
     const tab = tabsRef.current.find((tab) => tab.path === activeRef.current);
     if (
       tab &&
-      previewType(tab.path) &&
+      (previewType(tab.path) ||
+        (isMarkdown(tab.path) && visualProtection(tab.text))) &&
       tab.mode === "visual" &&
       !(await openFile(tab.path, undefined, {
         mode: "source",
@@ -1902,16 +1904,6 @@ export default function App() {
     }
   }
   async function toggleMode(tab: Tab) {
-    if (tab.mode === "source" && isMarkdown(tab.path)) {
-      const reason = visualProtection(tab.text);
-      if (reason) {
-        notify(
-          `Source mode preserves ${reason}. Visual editing is unavailable for this document.`,
-          true,
-        );
-        return;
-      }
-    }
     const savedPosition = capturePosition(tab.path);
     changeTabs((previous) =>
       previous.map((t) =>
@@ -3321,7 +3313,8 @@ export default function App() {
                         if (current.mode !== "visual") void toggleMode(current);
                       }}
                     >
-                      {previewType(current.path) ? (
+                      {previewType(current.path) ||
+                      (isMarkdown(current.path) && visualProtection(current.text)) ? (
                         <Eye size={13} />
                       ) : (
                         <PenLine size={13} />
@@ -3549,6 +3542,16 @@ export default function App() {
                   <ImagePreview path={tab.path} />
                 ) : previewType(tab.path) && tab.mode === "visual" ? (
                   <HtmlPreview
+                    path={tab.path}
+                    text={tab.text}
+                    onLink={(href) => void followLink(tab.path, href)}
+                    onActivate={() => focusPane(tab.path)}
+                    position={positions.current.get(tab.path) || tab.position}
+                  />
+                ) : isMarkdown(tab.path) &&
+                  tab.mode === "visual" &&
+                  visualProtection(tab.text) ? (
+                  <MarkdownPreview
                     path={tab.path}
                     text={tab.text}
                     onLink={(href) => void followLink(tab.path, href)}

@@ -806,7 +806,9 @@ test("autosave, quick open, dirty drafts across forced restart and unsupported M
     "<script>",
   );
   await page.getByRole("button", { name: "Visual mode", exact: true }).click();
-  await expect(page.locator(".editor-pane.active .cm-content")).toBeVisible();
+  await expect(page.getByLabel("Markdown preview", { exact: true })).toBeVisible();
+  await expect(page.locator(".editor-pane.active script")).toHaveCount(0);
+  expect(await disk("unsafe.md")).toBe('---\ntitle: Keep metadata\n---\n\n<script>throw new Error("never run")</script>\n\n[x][ref]\n\n[ref]: notes/welcome.md\n');
   expect(errors).toEqual([]);
 });
 
@@ -1130,6 +1132,113 @@ test("renderer isolation, path confinement, JSON diagnostics and literal HTML co
   expect(await disk("code-fences.md")).toContain(
     "<script>window.__marginExecuted = true</script>",
   );
+  expect(errors).toEqual([]);
+});
+
+test("Markdown visual preview renders PHP examples and reference links while preserving source", async () => {
+  await settingsManual();
+  const php =
+    "<?php\n$titel = 'ProjectHub';\necho $titel;\n?>\n\n<h1><?= $titel ?></h1>";
+  const fenced =
+    "# PHP example\n\n```php\n" +
+    php +
+    "\n```\n\n[PDF](<Extra oefening.pdf>)\n";
+  const initial = fenced.replace(/\n/g, "\r\n");
+  await fs.writeFile(file("php-example.md"), initial);
+  await expect(
+    page.getByRole("treeitem", { name: "php-example.md", exact: true }),
+  ).toBeVisible();
+  await open("php-example.md");
+  await expect(
+    page.getByRole("textbox", { name: "Visual Markdown editor" }),
+  ).toBeVisible();
+  await expect(page.locator(".editor-pane.active pre code")).toHaveText(php);
+  await page
+    .getByRole("button", { name: "Markdown source mode", exact: true })
+    .click();
+  const original =
+    "\uFEFF---\r\ntitle: Metadata stays exact\r\n---\r\n\r\n" +
+    (
+      fenced +
+      "\n[Lesson][L1]\n\n[Jump](#last-section)\n\n" +
+      "Paragraph for scrolling.\n\n".repeat(40) +
+      "## Last section\n\n<strong>Safe HTML</strong><script>window.__marginExecuted = true</script>\n\n" +
+      "[L1]: notes/other.md\n"
+    ).replace(/\n/g, "\r\n");
+  await sourceFill(original);
+  await page.getByRole("button", { name: "Visual mode", exact: true }).click();
+  let preview = page.getByLabel("Markdown preview", { exact: true });
+  await expect(preview).toBeVisible();
+  await expect(
+    page.getByText(
+      "Read-only preview · Edit in Source to preserve the original Markdown",
+    ),
+  ).toBeVisible();
+  await expect(preview.locator("[contenteditable]")).toHaveCount(0);
+  await expect(preview.locator("pre code")).toHaveText(php + "\n");
+  await expect(
+    preview.getByRole("link", { name: "Lesson", exact: true }),
+  ).toHaveAttribute("href", "notes/other.md");
+  await expect(preview.locator("strong")).toHaveText("Safe HTML");
+  await expect(preview.locator("script")).toHaveCount(0);
+  expect(await page.evaluate(() => window.__marginExecuted)).toBeUndefined();
+  expect(await disk("php-example.md")).toBe(initial);
+  await save();
+  expect(await disk("php-example.md")).toBe(original);
+  await preview.getByRole("link", { name: "Jump", exact: true }).click();
+  await expect(
+    preview.getByRole("heading", { name: "Last section", exact: true }),
+  ).toBeInViewport();
+  await preview.getByRole("link", { name: "Lesson", exact: true }).click();
+  await expect(page.locator(".editor-tab.active")).toHaveAttribute(
+    "data-tooltip",
+    "notes/other.md",
+  );
+  await open("php-example.md");
+  await expect(preview).toBeVisible();
+  await page.getByRole("button", { name: "Show outline", exact: true }).click();
+  await page
+    .getByRole("complementary", { name: "Document outline" })
+    .locator(".outline-entry")
+    .filter({ hasText: "Last section" })
+    .click();
+  await expect(
+    preview.getByRole("heading", { name: "Last section", exact: true }),
+  ).toBeInViewport();
+  await page
+    .getByRole("button", { name: "Close outline", exact: true })
+    .click();
+  await page.keyboard.press(shortcut + "+f");
+  await expect(
+    page.locator(".editor-pane.active .cm-search input[name=search]"),
+  ).toBeVisible();
+  await page.keyboard.press("Escape");
+  await page.getByRole("button", { name: "Visual mode", exact: true }).click();
+  await page
+    .getByRole("button", { name: "Close php-example.md", exact: true })
+    .click();
+  await open("php-example.md");
+  await expect(page.locator(".source-protection")).toContainText(
+    "embedded HTML",
+  );
+  await page.getByRole("button", { name: "Visual mode", exact: true }).click();
+  await expect
+    .poll(
+      async () =>
+        JSON.parse(
+          await fs.readFile(path.join(data, "state.json"), "utf8"),
+        ).sessions[root]?.tabs.find((tab) => tab.path === "php-example.md")
+          ?.mode,
+    )
+    .toBe("visual");
+  await app.evaluate(({ app }) => app.exit());
+  await app.close().catch(() => {});
+  app = null;
+  await launch();
+  preview = page.getByLabel("Markdown preview", { exact: true });
+  await expect(preview).toBeVisible();
+  await expect(preview.locator("pre code")).toHaveText(php + "\n");
+  expect(await disk("php-example.md")).toBe(original);
   expect(errors).toEqual([]);
 });
 
