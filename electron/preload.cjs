@@ -40,6 +40,8 @@ contextBridge.exposeInMainWorld("margin", {
   selectImage: invoke("image:choose"),
   clipboardImage: invoke("image:clipboard"),
   settings: invoke("app:settings"),
+  checkSpelling: invoke("app:check-spelling"),
+  onSpellcheckChanged: on("app:spellcheck-changed"),
   persist: invoke("app:persist"),
   openRecovery: invoke("app:recovery"),
   closeConfirmed: invoke("app:close-confirmed"),

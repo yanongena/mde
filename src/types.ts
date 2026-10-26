@@ -78,11 +78,21 @@ export interface Settings {
   historyVersions: number;
   indentSize: number;
   formatOnOpen: boolean;
+  spellcheckEnabled: boolean;
+  spellcheckLanguage: string;
   sidebarWidth: number;
   terminalHeight: number;
   sidebarVisible: boolean;
   terminalVisible: boolean;
   focusMode: boolean;
+}
+export interface SpellcheckInfo {
+  enabled: boolean;
+  language: string;
+  status: "loading" | "ready" | "error";
+  revision: number;
+  languages: string[];
+  systemLanguage: string;
 }
 export interface SavedSession {
   tabs: Tab[];
@@ -139,6 +149,7 @@ export interface MarginAPI {
     recovery: { file: string; message: string }[];
     shells: string[];
     platform: string;
+    spellcheck: SpellcheckInfo;
   }>;
   chooseWorkspace(): Promise<OpenedWorkspace | null>;
   openWorkspace(root: string): Promise<OpenedWorkspace>;
@@ -159,9 +170,7 @@ export interface MarginAPI {
     referencesUpdated: number;
     historyWarning?: string;
   }>;
-  trashSelection(
-    paths: string[],
-  ): Promise<{
+  trashSelection(paths: string[]): Promise<{
     trashed: string[];
     failed: { path: string; message: string }[];
   }>;
@@ -186,6 +195,11 @@ export interface MarginAPI {
   selectImage(path: string): Promise<Attachment | null>;
   clipboardImage(path: string): Promise<Attachment | null>;
   settings(settings: Partial<Settings>): Promise<Settings>;
+  checkSpelling(
+    words: string[],
+    revision: number,
+  ): Promise<{ ready: boolean; misspelled: string[] }>;
+  onSpellcheckChanged(callback: (info: SpellcheckInfo) => void): () => void;
   persist(
     session: Pick<
       SavedSession,

@@ -37,7 +37,14 @@ import {
   Search,
 } from "lucide-react";
 import { assetURL, splitMetadata, resolveLink } from "../lib/markdown";
-import type { Attachment, EditorPosition, Entry, Tab } from "../types";
+import type {
+  Attachment,
+  EditorPosition,
+  Entry,
+  Tab,
+  SpellcheckInfo,
+} from "../types";
+import { Spellcheck, spellcheckKey } from "./spellcheck";
 import { SlashMenuExtension } from "./slash-menu";
 import { SlashMenu } from "../components/SlashMenu";
 import { VisualSearch } from "./visual-search";
@@ -72,6 +79,7 @@ interface Props {
   position?: EditorPosition;
   entries?: Entry[];
   tabs?: Tab[];
+  spellcheck: SpellcheckInfo | null;
 }
 export function MarkdownEditor({
   path,
@@ -84,7 +92,10 @@ export function MarkdownEditor({
   position,
   entries = [],
   tabs = [],
+  spellcheck,
 }: Props) {
+  const spelling = useRef({ info: spellcheck, visible });
+  spelling.current = { info: spellcheck, visible };
   const { openMenu } = useContextMenu();
   const callbacks = useRef({ onChange, onError, onLink });
   callbacks.current = { onChange, onError, onLink };
@@ -116,6 +127,11 @@ export function MarkdownEditor({
     {
       extensions: [
         VisualSearch,
+        Spellcheck.configure({
+          info: () => spelling.current.info,
+          visible: () => spelling.current.visible,
+          onError: (message) => callbacks.current.onError(message),
+        }),
         SlashMenuExtension,
         StarterKit.configure({
           codeBlock: false,
@@ -184,7 +200,9 @@ export function MarkdownEditor({
         attributes: {
           class: "document-content",
           "aria-label": "Visual Markdown editor",
-          spellcheck: "true",
+          // Native markers are maintained incrementally by Chromium and can be
+          // stale. The spelling plugin checks every occurrence in the document.
+          spellcheck: "false",
         },
         handlePaste: (_view, event) => {
           const files = Array.from(event.clipboardData?.files || []).filter(
@@ -309,6 +327,15 @@ export function MarkdownEditor({
     },
     [path],
   );
+  useEffect(() => {
+    if (!editor) return;
+    editor.view.dom.lang = spellcheck?.language || "";
+    editor.view.dispatch(
+      editor.state.tr
+        .setMeta(spellcheckKey, "refresh")
+        .setMeta("addToHistory", false),
+    );
+  }, [editor, spellcheck, visible]);
   useEffect(() => {
     if (editor && text !== lastOutput.current) {
       original.current = splitMetadata(text);

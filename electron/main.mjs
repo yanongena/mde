@@ -24,6 +24,7 @@ import { searchWorkspace } from "./search.mjs";
 import { FileHistory } from "./history.mjs";
 import { selectionRoots } from "./selection.mjs";
 import { savedPosition } from "./session.mjs";
+import { createSpellcheck } from "./spellcheck.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 if (process.env.MARGIN_DATA_PATH)
@@ -50,6 +51,8 @@ const defaults = {
   historyVersions: 20,
   indentSize: 2,
   formatOnOpen: true,
+  spellcheckEnabled: true,
+  spellcheckLanguage: "system",
   sidebarWidth: 260,
   terminalHeight: 240,
   sidebarVisible: true,
@@ -184,7 +187,11 @@ async function startApplication() {
       if (url.hostname !== "workspace" || !workspace)
         return new Response("", { status: 403 });
       const name = decodeURIComponent(url.pathname.slice(1));
-      if (!/\.(png|jpe?g|gif|webp|bmp|ico|avif|svg|css|woff2?|ttf|otf)$/i.test(name))
+      if (
+        !/\.(png|jpe?g|gif|webp|bmp|ico|avif|svg|css|woff2?|ttf|otf)$/i.test(
+          name,
+        )
+      )
         return new Response("", { status: 415 });
       const target = await workspace.resolve(name);
       const response = await net.fetch(pathToFileURL(target).href);
@@ -199,6 +206,19 @@ async function startApplication() {
     (_contents, _permission, callback) => callback(false),
   );
   session.defaultSession.setPermissionCheckHandler(() => false);
+  const spellcheck = createSpellcheck(app.getLocale(), (info) =>
+    send("app:spellcheck-changed", info),
+  );
+  try {
+    spellcheck.validate(state.settings.spellcheckLanguage);
+  } catch {
+    state.settings.spellcheckLanguage = "system";
+  }
+  void spellcheck.configure(state.settings);
+  app.on("will-quit", () => spellcheck.dispose());
+  handle("app:check-spelling", (words, revision) =>
+    spellcheck.check(words, revision),
+  );
 
   handle("app:bootstrap", async () => {
     let opened = null,
@@ -218,6 +238,7 @@ async function startApplication() {
       recovery: transactions.blocked,
       shells: installedShells().map((s) => s.name),
       platform: process.platform,
+      spellcheck: spellcheck.info(),
     };
   });
   handle("workspace:choose", async () => {
@@ -474,6 +495,7 @@ async function startApplication() {
         "autosave",
         "attachmentMode",
         "attachmentFolder",
+        "spellcheckLanguage",
       ])
         if (typeof update[key] === "string") next[key] = update[key];
       for (const key of [
@@ -495,6 +517,7 @@ async function startApplication() {
         "focusMode",
         "formatOnOpen",
         "historyEnabled",
+        "spellcheckEnabled",
       ])
         if (typeof update[key] === "boolean") next[key] = update[key];
       if (
@@ -542,6 +565,7 @@ async function startApplication() {
       const historyChanged =
         next.historyLimitMB !== state.settings.historyLimitMB ||
         next.historyVersions !== state.settings.historyVersions;
+      spellcheck.validate(next.spellcheckLanguage);
       const ignoresChanged =
         JSON.stringify(next.ignored) !== JSON.stringify(state.settings.ignored);
       if (historyChanged) {
@@ -556,6 +580,7 @@ async function startApplication() {
       }
       state.settings = next;
       await saveState();
+      void spellcheck.configure(next);
       if (workspace) {
         workspace.ignored = next.ignored;
         if (ignoresChanged) await openWorkspace(workspace.root);
@@ -683,6 +708,7 @@ async function startApplication() {
         contextIsolation: true,
         sandbox: true,
         webSecurity: true,
+        spellcheck: false,
       },
     });
     if (state.window?.maximized) win.maximize();

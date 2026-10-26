@@ -78,6 +78,7 @@ import type {
   EditorPosition,
   ClosedTab,
   SearchMatch,
+  SpellcheckInfo,
 } from "./types";
 
 type Choice = {
@@ -111,6 +112,8 @@ const initialSettings: Settings = {
   historyVersions: 20,
   indentSize: 2,
   formatOnOpen: true,
+  spellcheckEnabled: true,
+  spellcheckLanguage: "system",
   sidebarWidth: 260,
   terminalHeight: 240,
   sidebarVisible: true,
@@ -126,6 +129,10 @@ const errorMessage = (error: unknown) =>
     /^Error invoking remote method '[^']+': Error: /,
     "",
   );
+const spellingLanguageName = (code: string) =>
+  code === "nl"
+    ? "Nederlands · Dutch"
+    : new Intl.DisplayNames(["en"], { type: "language" }).of(code) || code;
 function FileIcon({
   path,
   directory = false,
@@ -177,6 +184,7 @@ export default function App() {
   const [settings, setSettings] = useState(initialSettings),
     settingsRef = useRef(settings);
   settingsRef.current = settings;
+  const [spellcheck, setSpellcheck] = useState<SpellcheckInfo | null>(null);
   const [root, setRoot] = useState(""),
     rootRef = useRef(root);
   rootRef.current = root;
@@ -375,12 +383,24 @@ export default function App() {
       fail(error);
     }
   }
-  const updateSettings = async (patch: Partial<Settings>) => {
+  const updateSettings = async (
+    patch: Partial<Settings>,
+    optimistic = false,
+  ) => {
+    const previous = settingsRef.current;
+    if (optimistic) {
+      settingsRef.current = { ...previous, ...patch };
+      setSettings(settingsRef.current);
+    }
     try {
       const next = await window.margin.settings(patch);
       settingsRef.current = next;
       setSettings(next);
     } catch (e) {
+      if (optimistic) {
+        settingsRef.current = previous;
+        setSettings(previous);
+      }
       fail(e);
     }
   };
@@ -496,6 +516,11 @@ export default function App() {
     );
   }
   useEffect(() => {
+    const updateSpelling = (info: SpellcheckInfo) =>
+      setSpellcheck((previous) =>
+        !previous || info.revision >= previous.revision ? info : previous,
+      );
+    const unsubscribe = window.margin.onSpellcheckChanged(updateSpelling);
     void window.margin
       .bootstrap()
       .then(async (data) => {
@@ -506,11 +531,13 @@ export default function App() {
         setChosenShell(data.shells[0] || "");
         setRecovery(data.recovery);
         setPlatform(data.platform);
+        updateSpelling(data.spellcheck);
         if (data.workspace) await restore(data.workspace);
         if (data.error) notify(data.error, true);
       })
       .catch(fail)
       .finally(() => setLoading(false));
+    return unsubscribe;
   }, []);
   useEffect(() => {
     document.documentElement.dataset.theme = settings.theme;
@@ -3152,6 +3179,7 @@ export default function App() {
                     onLink={(href) => void followLink(tab.path, href)}
                     entries={entries}
                     tabs={tabs}
+                    spellcheck={spellcheck}
                     active={active === tab.path}
                     visible={
                       active === tab.path ||
@@ -3736,6 +3764,71 @@ export default function App() {
                     ))}
                   </select>
                 </label>
+              </div>
+              <div className="settings-section">
+                <h3>Spelling</h3>
+                <label>
+                  Check spelling in visual Markdown
+                  <input
+                    type="checkbox"
+                    aria-label="Check spelling"
+                    checked={settings.spellcheckEnabled}
+                    onChange={(event) =>
+                      void updateSettings(
+                        {
+                          spellcheckEnabled: event.target.checked,
+                        },
+                        true,
+                      )
+                    }
+                  />
+                </label>
+                <label>
+                  Spellcheck language
+                  <select
+                    aria-label="Spellcheck language"
+                    value={settings.spellcheckLanguage}
+                    disabled={!settings.spellcheckEnabled || !spellcheck}
+                    onChange={(event) =>
+                      void updateSettings({
+                        spellcheckLanguage: event.target.value,
+                      })
+                    }
+                  >
+                    <option value="system">
+                      System language
+                      {spellcheck
+                        ? ` · ${spellingLanguageName(spellcheck.systemLanguage)}`
+                        : ""}
+                    </option>
+                    {[...(spellcheck?.languages || [])]
+                      .sort((a, b) =>
+                        spellingLanguageName(a).localeCompare(
+                          spellingLanguageName(b),
+                        ),
+                      )
+                      .map((code) => (
+                        <option key={code} value={code}>
+                          {spellingLanguageName(code)}
+                        </option>
+                      ))}
+                  </select>
+                </label>
+                <p>
+                  Check all text in visual Markdown, including headings, lists
+                  and tables. Inline code and code blocks are skipped. Changes
+                  apply immediately. Dutch, English (US/UK), French and German
+                  dictionaries are included. Checks run locally and work
+                  offline.
+                </p>
+                {settings.spellcheckEnabled &&
+                  spellcheck?.status !== "ready" && (
+                    <p role="status">
+                      {spellcheck?.status === "error"
+                        ? "The spelling dictionary could not be loaded. Turn spelling off and on to retry."
+                        : "Loading the spelling dictionary… Text will be checked automatically when it is ready."}
+                    </p>
+                  )}
               </div>
               <div className="settings-section">
                 <h3>Saving & recovery</h3>

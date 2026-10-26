@@ -3193,6 +3193,109 @@ test("P2 QoL conflicts highlight aligned line changes, synchronize scrolling and
   expect(errors).toEqual([]);
 });
 
+test("spelling checks every occurrence, switches dictionaries, disables immediately and survives restart", async () => {
+  const text = "# een qzxqzxqzx\n\neen verschillende qzxqzxqzx\n\n1. een qzxqzxqzx\n2. een **qzx**qzxqzx\n\n| een | qzxqzxqzx |\n| --- | --- |\n| een | verschillende |\n\n`qzxqzxqzx`\n\n```text\nqzxqzxqzx\n```\n";
+  await fs.writeFile(file("notes/welcome.md"), text);
+  await open("notes/welcome.md");
+  let editor = page.locator(".editor-pane.active .document-content");
+  const mistakes = () => editor.locator(".spelling-error").allTextContents();
+  await page.getByRole("button", { name: "Preferences", exact: true }).click();
+  await page.getByLabel("Spellcheck language", { exact: true }).selectOption("nl");
+  await page.getByRole("button", { name: "Close preferences" }).click();
+  // One formatted word uses two decorations, but every occurrence has the same verdict.
+  await expect.poll(mistakes).toEqual(["qzxqzxqzx", "qzxqzxqzx", "qzxqzxqzx", "qzx", "qzxqzx", "qzxqzxqzx"]);
+  await expect(editor).toHaveAttribute("spellcheck", "false");
+  await expect(editor).toHaveAttribute("lang", "nl");
+  await expect(page.locator(".save-state")).toContainText("Saved");
+  expect(await disk("notes/welcome.md")).toBe(text);
+
+  await page.getByRole("button", { name: "Preferences", exact: true }).click();
+  await page.getByLabel("Spellcheck language", { exact: true }).selectOption("en-US");
+  await page.getByRole("button", { name: "Close preferences" }).click();
+  await expect.poll(mistakes, { timeout: 30000 }).toContain("verschillende");
+  await page.getByRole("button", { name: "Preferences", exact: true }).click();
+  await page.getByLabel("Check spelling", { exact: true }).uncheck();
+  await expect(page.getByLabel("Spellcheck language", { exact: true })).toBeDisabled();
+  await page.getByRole("button", { name: "Close preferences" }).click();
+  await expect.poll(mistakes).toEqual([]);
+
+  const saved = JSON.parse(await fs.readFile(path.join(data, "state.json"), "utf8"));
+  expect(saved.settings.spellcheckEnabled).toBe(false);
+  expect(saved.settings.spellcheckLanguage).toBe("en-US");
+  await app.evaluate(({ app }) => app.exit());
+  await app.close().catch(() => {});
+  await launch();
+  editor = page.locator(".editor-pane.active .document-content");
+  await expect.poll(mistakes).toEqual([]);
+  await page.getByRole("button", { name: "Preferences", exact: true }).click();
+  await expect(page.getByLabel("Check spelling", { exact: true })).not.toBeChecked();
+  await page.getByLabel("Check spelling", { exact: true }).check();
+  await page.getByLabel("Spellcheck language", { exact: true }).selectOption("nl");
+  await page.getByRole("button", { name: "Close preferences" }).click();
+  await expect.poll(mistakes, { timeout: 30000 }).toHaveLength(6);
+
+  // Edits, undo and external reload all invalidate the entire document verdict.
+  await editor.locator("h1").click();
+  await page.keyboard.press("End");
+  await page.keyboard.insertText(" qzxqzxqzx");
+  await expect.poll(mistakes).toHaveLength(7);
+  await page.keyboard.press(shortcut + "+z");
+  await expect.poll(mistakes).toHaveLength(6);
+  await save();
+  await fs.writeFile(file("notes/welcome.md"), "# een\n\neen qzxqzxqzx\n\neen\n");
+  await expect.poll(mistakes).toEqual(["qzxqzxqzx"]);
+  await open("notes/other.md");
+  await open("notes/welcome.md");
+  await expect.poll(mistakes).toEqual(["qzxqzxqzx"]);
+  expect(errors).toEqual([]);
+});
+
+test("spelling refreshes both split panes and source-mode edits with offline dictionaries", async () => {
+  const original = "# een qzxqzxqzx\n\nverschillende\n";
+  await fs.writeFile(file("notes/welcome.md"), original);
+  await fs.writeFile(file("notes/other.md"), original);
+  // The renderer does not need internet access to load or use a dictionary.
+  await page.context().setOffline(true);
+  await page.getByRole("button", { name: "Preferences", exact: true }).click();
+  await page.getByLabel("Spellcheck language", { exact: true }).selectOption("nl");
+  await page.getByLabel("Spellcheck language", { exact: true }).scrollIntoViewIfNeeded();
+  await page.getByRole("dialog", { name: "Preferences", exact: true }).screenshot({ path: "test-results/spelling-preferences.png" });
+  await page.getByRole("button", { name: "Close preferences" }).click();
+  await open("notes/welcome.md");
+  await open("notes/other.md");
+  await page.locator('.editor-tab[data-tooltip="notes/welcome.md"]').click({ button: "right" });
+  await menuAction("Open beside current");
+  const left = page.locator('.editor-pane[data-path="notes/other.md"]');
+  const right = page.locator('.editor-pane[data-path="notes/welcome.md"]');
+  await expect(left.locator(".spelling-error")).toHaveText(["qzxqzxqzx"]);
+  await expect(right.locator(".spelling-error")).toHaveText(["qzxqzxqzx"]);
+  await page.getByRole("button", { name: "Preferences", exact: true }).click();
+  await page.getByLabel("Spellcheck language", { exact: true }).selectOption("en-US");
+  await page.getByRole("button", { name: "Close preferences" }).click();
+  await expect(left.locator(".spelling-error").filter({ hasText: "verschillende" })).toHaveCount(1);
+  await expect(right.locator(".spelling-error").filter({ hasText: "verschillende" })).toHaveCount(1);
+  await page.getByRole("button", { name: "Preferences", exact: true }).click();
+  await page.getByLabel("Spellcheck language", { exact: true }).selectOption("fr");
+  await page.getByLabel("Spellcheck language", { exact: true }).selectOption("nl");
+  await page.getByRole("button", { name: "Close preferences" }).click();
+  await expect(left.locator(".spelling-error")).toHaveText(["qzxqzxqzx"]);
+  await expect(right.locator(".spelling-error")).toHaveText(["qzxqzxqzx"]);
+  await right.locator("h1").click();
+  await page.getByRole("button", { name: "Markdown source mode", exact: true }).click();
+  await sourceFill("# een\n\neen\n");
+  await page.getByRole("button", { name: "Visual mode", exact: true }).click();
+  await expect(right.locator(".document-content")).toHaveText("eeneen");
+  await expect(right.locator(".spelling-error")).toHaveCount(0);
+  await expect(left.locator(".spelling-error")).toHaveText(["qzxqzxqzx"]);
+  expect(await disk("notes/welcome.md")).toBe(original);
+  const rejected = await page.evaluate(async () => {
+    try { await window.margin.settings({ spellcheckLanguage: "unavailable" }); return false; }
+    catch { return true; }
+  });
+  expect(rejected).toBe(true);
+  expect(errors).toEqual([]);
+});
+
 test("P3 QoL reading settings apply without edits and persist across restart", async () => {
   const original = await disk("notes/welcome.md");
   await open("notes/welcome.md");

@@ -31,6 +31,8 @@
       "package.json"
     ],
     "asarUnpack": [
+      "electron/spellcheck-worker.mjs",
+      "node_modules/{nspell,is-buffer,dictionary-*}/**/*",
       "node_modules/node-pty/**/*"
     ],
     "npmRebuild": false,
@@ -77,9 +79,15 @@
     "@xterm/xterm": "^6.0.0",
     "chokidar": "^6.0.0",
     "codemirror": "^6.0.2",
+    "dictionary-de": "^3.0.0",
+    "dictionary-en": "^4.0.0",
+    "dictionary-en-gb": "^3.0.0",
+    "dictionary-fr": "^3.0.0",
+    "dictionary-nl": "^2.0.0",
     "lowlight": "^3.3.0",
     "lucide-react": "^1.61.0",
     "node-pty": "1.2.0-beta.18",
+    "nspell": "^2.1.5",
     "react": "^19.3.1",
     "react-dom": "^19.3.1",
     "remark-gfm": "^4.0.1",

@@ -1644,6 +1644,13 @@ kbd {
   padding: 0 30px 24px;
   overflow: auto;
 }
+.document-content .spelling-error {
+  text-decoration-line: underline;
+  text-decoration-style: wavy;
+  text-decoration-color: #db5757;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 3px;
+}
 .settings-section {
   padding: 23px 0;
   border-bottom: 1px solid var(--line);
