@@ -20,6 +20,11 @@ async function open(name) {
     name,
   );
 }
+async function documentAction(name) {
+  await page.getByRole("button", {name: "Document actions", exact: true}).click();
+  await page.getByRole("menuitem", {name, exact: true}).click();
+}
+
 async function settingsManual() {
   await page.getByRole("button", { name: "Preferences", exact: true }).click();
   await page.getByLabel("Autosave policy").selectOption("off");
@@ -2912,9 +2917,9 @@ test("QoL closed tabs reopen once per shortcut, persist, and never resurrect dis
     .getByRole("button", { name: "Close welcome.md", exact: true })
     .click();
   await page.getByRole("button", { name: "Cancel", exact: true }).click();
-  await expect(
-    page.getByRole("button", { name: "Reopen closed tab", exact: true }),
-  ).toBeDisabled();
+  await page.getByRole("button", {name: "Document actions", exact: true}).click();
+  await expect(page.getByRole("menuitem", { name: "Reopen closed tab", exact: true })).toBeDisabled();
+  await page.keyboard.press("Escape");
   await page
     .getByRole("button", { name: "Close welcome.md", exact: true })
     .click();
@@ -2933,9 +2938,9 @@ test("QoL closed tabs reopen once per shortcut, persist, and never resurrect dis
   await expect(
     page.locator(".editor-pane.active .cm-content"),
   ).not.toContainText("SECRET_DISCARDED_DRAFT");
-  await expect(
-    page.getByRole("button", { name: "Reopen closed tab", exact: true }),
-  ).toBeDisabled();
+  await page.getByRole("button", {name: "Document actions", exact: true}).click();
+  await expect(page.getByRole("menuitem", { name: "Reopen closed tab", exact: true })).toBeDisabled();
+  await page.keyboard.press("Escape");
   expect(await disk("notes/welcome.md")).toBe(original);
   await open("notes/other.md");
   await page
@@ -3416,7 +3421,7 @@ test("Compare files highlights HTML exercise and solution without opening or for
   await fs.writeFile(file('solution.html'), solution);
   await expect(page.getByRole('treeitem', { name: 'solution.html', exact: true })).toBeVisible();
   await open('notes/welcome.md');
-  await page.getByRole('button', { name: 'Compare files', exact: true }).click();
+  await documentAction('Compare files');
   const dialog = page.getByRole('dialog', { name: 'Compare files', exact: true });
   await dialog.getByLabel('Left file (exercise)', { exact: true }).selectOption('exercise.html');
   await dialog.getByLabel('Right file (solution)', { exact: true }).selectOption('solution.html');
@@ -3454,7 +3459,7 @@ test("Compare files highlights HTML exercise and solution without opening or for
   await expect(page.locator('.editor-tab')).toHaveCount(1);
   await page.keyboard.press('Escape');
   await expect(dialog).toHaveCount(0);
-  await expect(page.getByRole('button', { name: 'Compare files', exact: true })).toBeFocused();
+  await expect(page.getByRole('button', { name: 'Document actions', exact: true })).toBeFocused();
   expect(await disk('exercise.html')).toBe(exercise);
   expect(await disk('solution.html')).toBe(solution);
   expect(errors).toEqual([]);
@@ -3478,7 +3483,7 @@ test("Compare files uses dirty split buffers, handles unavailable files and mark
   await page.locator('.editor-tab[data-tooltip="exercise.txt"]').click({ button: 'right' });
   await menuAction('Open beside current');
   await expect(page.locator('.editor-pane.split-visible')).toHaveCount(2);
-  await page.getByRole('button', { name: 'Compare files', exact: true }).click();
+  await documentAction('Compare files');
   await expect(dialog.getByLabel('Left file (exercise)', { exact: true })).toHaveValue('solution.txt');
   await expect(dialog.getByLabel('Right file (solution)', { exact: true })).toHaveValue('exercise.txt');
   await expect(dialog.locator('.diff-line.diff-mine')).toContainText(['unsaved solution']);
@@ -3499,7 +3504,7 @@ test("Compare files uses dirty split buffers, handles unavailable files and mark
   await fs.writeFile(file('unavailable.txt'), 'available');
   await fs.writeFile(file('binary.dat'), Buffer.from([0, 1, 2, 3]));
   await expect(page.getByRole('treeitem', { name: 'unavailable.txt', exact: true })).toBeVisible();
-  await page.getByRole('button', { name: 'Compare files', exact: true }).click();
+  await documentAction('Compare files');
   await dialog.getByLabel('Left file (exercise)', { exact: true }).selectOption('large-left.txt');
   await dialog.getByLabel('Right file (solution)', { exact: true }).selectOption('large-right.txt');
   await expect(dialog).toContainText('Limited preview:');
@@ -3772,9 +3777,7 @@ test("P3 QoL local history compares saved versions, checkpoints dirty text and r
   expect(versions).toHaveLength(2);
   const oldest = versions.at(-1).id;
   await sourceFill("# Unsaved before restore\n");
-  await page
-    .getByRole("button", { name: "Local version history", exact: true })
-    .click();
+  await documentAction("Local version history");
   const history = page.getByRole("dialog", {
     name: "Local version history",
     exact: true,
@@ -3806,9 +3809,7 @@ test("P3 QoL local history compares saved versions, checkpoints dirty text and r
   await save();
   expect(await disk(name)).toBe(original);
   await move(name, "archive/welcome.md");
-  await page
-    .getByRole("button", { name: "Local version history", exact: true })
-    .click();
+  await documentAction("Local version history");
   await expect(
     page
       .getByRole("dialog", { name: "Local version history", exact: true })
@@ -4451,5 +4452,292 @@ test("P3 QoL split mode routes new documents into the focused pane and preserves
     /split-visible/,
   );
   expect(await disk("index.md")).toContain("archive/welcome.md");
+  expect(errors).toEqual([]);
+});
+
+test("UX clarity search scopes preserve the query and Explorer batch mode stays out of normal navigation", async () => {
+  await open("notes/welcome.md");
+  await expect(page.locator(".selection-actions")).toHaveCount(0);
+  await page.locator(".global-search").click();
+  const palette = page.getByRole("dialog", { name: "Quick open", exact: true });
+  const scopes = palette.getByRole("navigation", { name: "Search scope" });
+  await palette
+    .getByLabel("Search files", { exact: true })
+    .fill("New document");
+  await scopes.getByRole("button", { name: "Commands", exact: true }).click();
+  await expect(page.getByLabel("Search commands", { exact: true })).toHaveValue(
+    "New document",
+  );
+  await page
+    .getByRole("dialog", { name: "Command palette", exact: true })
+    .getByRole("button", { name: /New.*document/ })
+    .click();
+  await expect(
+    page.getByRole("dialog", { name: "New document", exact: true }),
+  ).toBeVisible();
+  await page.getByRole("button", { name: "Cancel", exact: true }).click();
+  await page.locator(".global-search").click();
+  await page.getByLabel("Search files", { exact: true }).fill("Words and work");
+  await page
+    .getByRole("navigation", { name: "Search scope" })
+    .getByRole("button", { name: "Contents", exact: true })
+    .click();
+  await expect(
+    page.getByLabel("Search workspace contents", { exact: true }),
+  ).toHaveValue("Words and work");
+  await expect(
+    page.getByLabel("Search workspace contents", { exact: true }),
+  ).toBeFocused();
+  await page.locator(".workspace-search-result").first().click();
+  await expect(page.locator(".editor-pane.active .cm-content")).toContainText(
+    "Words and work",
+  );
+  await expect
+    .poll(() => page.evaluate(() => getSelection().toString()))
+    .toBe("Words and work");
+  await page
+    .getByRole("button", { name: "Show explorer", exact: true })
+    .click();
+  const batch = page.getByRole("button", { name: "Select files", exact: true });
+  await batch.click();
+  await expect(batch).toHaveAttribute("aria-pressed", "true");
+  await expect(page.locator(".selection-actions")).toContainText("0 selected");
+  await expect(
+    page.getByRole("button", { name: "Move selected items", exact: true }),
+  ).toBeDisabled();
+  const active = await page
+    .locator(".editor-tab.active")
+    .getAttribute("data-tooltip");
+  await page
+    .getByRole("treeitem", { name: "notes/other.md", exact: true })
+    .click();
+  await expect(page.locator(".editor-tab.active")).toHaveAttribute(
+    "data-tooltip",
+    active,
+  );
+  await expect(page.locator(".selection-actions")).toContainText("1 selected");
+  await page
+    .getByRole("treeitem", { name: "notes/welcome.md", exact: true })
+    .click();
+  await expect(page.getByRole("treeitem", { selected: true })).toHaveCount(2);
+  await page.keyboard.press("ArrowUp");
+  await expect(page.getByRole("treeitem", { selected: true })).toHaveCount(2);
+  await page.keyboard.press("Space");
+  await expect(page.getByRole("treeitem", { selected: true })).toHaveCount(1);
+  await page.keyboard.press("Space");
+  await expect(page.getByRole("treeitem", { selected: true })).toHaveCount(2);
+  await page
+    .getByRole("button", { name: "Done selecting files", exact: true })
+    .click();
+  await expect(page.locator(".selection-actions")).toHaveCount(0);
+  await open("notes/welcome.md");
+  await page
+    .getByRole("treeitem", { name: "notes/other.md", exact: true })
+    .click({ modifiers: [shortcut] });
+  await expect(page.getByRole("treeitem", { selected: true })).toHaveCount(2);
+  await page.keyboard.press("Escape");
+  await expect(page.locator(".selection-actions")).toHaveCount(0);
+  expect(errors).toEqual([]);
+});
+
+test("UX clarity preferences search, category reset, cancellation and persistence preserve other preferences", async () => {
+  const original = await disk("notes/welcome.md");
+  await open("notes/welcome.md");
+  await page.getByRole("button", { name: "Preferences", exact: true }).click();
+  const prefs = page.getByRole("dialog", { name: "Preferences", exact: true });
+  await expect(
+    prefs.getByLabel("Search preferences", { exact: true }),
+  ).toBeFocused();
+  await expect(prefs).toContainText("Changes apply immediately");
+  await prefs
+    .getByLabel("Reading font size", { exact: true })
+    .selectOption("24");
+  await prefs.getByLabel("Attachment folder", { exact: true }).fill("pictures");
+  await prefs.getByLabel("Attachment folder", { exact: true }).press("Enter");
+  await prefs
+    .getByRole("navigation", { name: "Preferences categories" })
+    .getByRole("button", { name: "Images & attachments", exact: true })
+    .click();
+  await expect(
+    prefs.getByLabel("Reading font size", { exact: true }),
+  ).toBeHidden();
+  await expect(
+    prefs.getByLabel("Attachment folder", { exact: true }),
+  ).toHaveValue("pictures");
+  await prefs
+    .getByRole("button", { name: "Restore category defaults…", exact: true })
+    .click();
+  await page
+    .getByRole("dialog", { name: "Restore default preferences?", exact: true })
+    .getByRole("button", { name: "Cancel", exact: true })
+    .click();
+  await expect(
+    prefs.getByLabel("Attachment folder", { exact: true }),
+  ).toHaveValue("pictures");
+  await prefs
+    .getByRole("button", { name: "Restore category defaults…", exact: true })
+    .click();
+  await page
+    .getByRole("button", { name: "Restore defaults", exact: true })
+    .click();
+  await expect(
+    prefs.getByLabel("Attachment folder", { exact: true }),
+  ).toHaveValue("assets");
+  await prefs
+    .getByLabel("Search preferences", { exact: true })
+    .fill("reading font");
+  await expect(
+    prefs.getByLabel("Reading font size", { exact: true }),
+  ).toHaveValue("24");
+  await expect(
+    prefs.getByLabel("Autosave policy", { exact: true }),
+  ).toBeHidden();
+  await prefs
+    .getByLabel("Search preferences", { exact: true })
+    .fill("nothing-matches-this");
+  await expect(prefs).toContainText("No preferences match");
+  await expect(
+    prefs.getByRole("button", {
+      name: "Restore matching defaults…",
+      exact: true,
+    }),
+  ).toBeDisabled();
+  await prefs
+    .getByLabel("Search preferences", { exact: true })
+    .fill("autosave");
+  await expect(
+    prefs.getByLabel("Autosave policy", { exact: true }),
+  ).toHaveValue("off");
+  await prefs
+    .getByRole("button", { name: "Close preferences", exact: true })
+    .click();
+  expect(await disk("notes/welcome.md")).toBe(original);
+  await app.evaluate(({ app }) => app.exit());
+  await app.close().catch(() => {});
+  await launch();
+  await page.getByRole("button", { name: "Preferences", exact: true }).click();
+  await expect(
+    page.getByLabel("Reading font size", { exact: true }),
+  ).toHaveValue("24");
+  await expect(
+    page.getByLabel("Attachment folder", { exact: true }),
+  ).toHaveValue("assets");
+  await expect(page.getByLabel("Autosave policy", { exact: true })).toHaveValue(
+    "off",
+  );
+  await page
+    .getByRole("dialog", { name: "Preferences", exact: true })
+    .screenshot({ path: "test-results/ux-preferences.png" });
+  await page.getByLabel("Ignored directories", { exact: true }).fill("assets");
+  await page.getByLabel("Ignored directories", { exact: true }).press("Enter");
+  await page
+    .getByRole("button", { name: "Restore all defaults…", exact: true })
+    .click();
+  await page
+    .getByRole("button", { name: "Restore defaults", exact: true })
+    .click();
+  await expect(
+    page.getByLabel("Reading font size", { exact: true }),
+  ).toHaveValue("17");
+  await expect(page.getByLabel("Autosave policy", { exact: true })).toHaveValue(
+    "afterDelay",
+  );
+  await expect(
+    page.getByLabel("Ignored directories", { exact: true }),
+  ).toHaveValue(/node_modules/);
+  await page
+    .getByRole("button", { name: "Close preferences", exact: true })
+    .click();
+  await expect(
+    page.getByRole("treeitem", { name: "assets", exact: true }),
+  ).toBeVisible();
+  expect(await disk("notes/welcome.md")).toBe(original);
+  expect(errors).toEqual([]);
+});
+
+test("UX clarity readable contrast, compact document actions and keyboard access work in both themes", async () => {
+  await open("notes/welcome.md");
+  for (const theme of ["light", "dark"]) {
+    if (theme === "dark")
+      await page
+        .getByRole("button", { name: "Toggle theme", exact: true })
+        .click();
+    const metrics = await page.evaluate(() => {
+      const luminance = (color) => {
+        const rgb = color
+          .match(/[\d.]+/g)
+          .slice(0, 3)
+          .map(Number)
+          .map((n) => n / 255)
+          .map((n) =>
+            n <= 0.04045 ? n / 12.92 : ((n + 0.055) / 1.055) ** 2.4,
+          );
+        return 0.2126 * rgb[0] + 0.7152 * rgb[1] + 0.0722 * rgb[2];
+      };
+      return [
+        ".save-state",
+        ".status-bar",
+        ".sidebar-footer",
+        ".workspace-badge",
+      ].map((selector) => {
+        const element = document.querySelector(selector),
+          style = getComputedStyle(element);
+        let parent = element;
+        while (
+          parent &&
+          getComputedStyle(parent).backgroundColor === "rgba(0, 0, 0, 0)"
+        )
+          parent = parent.parentElement;
+        const fg = luminance(style.color),
+          bg = luminance(getComputedStyle(parent).backgroundColor);
+        return {
+          selector,
+          contrast: (Math.max(fg, bg) + 0.05) / (Math.min(fg, bg) + 0.05),
+          font: parseFloat(style.fontSize),
+        };
+      });
+    });
+    for (const metric of metrics) {
+      expect(
+        metric.contrast,
+        `${theme} ${metric.selector}`,
+      ).toBeGreaterThanOrEqual(4.5);
+      expect(metric.font).toBeGreaterThanOrEqual(11);
+    }
+  }
+  await app.evaluate(({ BrowserWindow }) =>
+    BrowserWindow.getAllWindows()[0].setContentSize(820, 650),
+  );
+  await expect(page.locator(".save-state")).toBeVisible();
+  await expect(
+    page.getByRole("group", { name: "Writing", exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("group", { name: "Navigation", exact: true }),
+  ).toBeVisible();
+  const actions = page.getByRole("button", {
+    name: "Document actions",
+    exact: true,
+  });
+  await actions.scrollIntoViewIfNeeded();
+  await actions.focus();
+  await expect(actions).toBeFocused();
+  await page.keyboard.press("Enter");
+  await expect(
+    page.getByRole("menuitem", { name: "Local version history", exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("menuitem", { name: "Compare files", exact: true }),
+  ).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(actions).toBeFocused();
+  await page.screenshot({ path: "test-results/ux-compact-dark.png" });
+  await documentAction("Local version history");
+  await expect(
+    page.getByRole("dialog", { name: "Local version history", exact: true }),
+  ).toBeVisible();
+  await page
+    .getByRole("button", { name: "Close history", exact: true })
+    .click();
   expect(errors).toEqual([]);
 });

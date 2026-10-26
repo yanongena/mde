@@ -160,6 +160,7 @@ export interface MarginAPI {
   copyImage(pixels: number[]): Promise<void>;
   imageBytes(source: string): Promise<number[]>;
   bootstrap(): Promise<{
+    defaults: Settings;
     settings: Settings;
     recent: string[];
     workspace: OpenedWorkspace | null;

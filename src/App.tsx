@@ -40,20 +40,20 @@ import {
   ArrowRight,
   ArrowLeft,
   SearchCode,
-  RotateCcw,
   Pin,
   Columns2,
-  FileDiff,
-  History,
   Folder,
   PanelBottomClose,
   PanelBottomOpen,
   ListTree,
+  ListChecks,
   LoaderCircle,
 } from "lucide-react";
 import { MarkdownEditor } from "./editors/MarkdownEditor";
 import { CodeEditor } from "./editors/CodeEditor";
 import { supportsFormatting } from "./lib/formatting";
+import { PreferencesDialog } from "./components/PreferencesDialog";
+import { preferenceCategories } from "./lib/preferences";
 import { Tooltip } from "./components/Tooltip";
 import { useContextMenu } from "./components/ContextMenu";
 import { revealLabel } from "./lib/edit-menu";
@@ -153,10 +153,6 @@ const errorMessage = (error: unknown) =>
     /^Error invoking remote method '[^']+': Error: /,
     "",
   );
-const spellingLanguageName = (code: string) =>
-  code === "nl"
-    ? "Nederlands · Dutch"
-    : new Intl.DisplayNames(["en"], { type: "language" }).of(code) || code;
 function FileIcon({
   path,
   directory = false,
@@ -194,6 +190,7 @@ export default function App() {
     left: string;
     right: string;
   } | null>(null);
+  const [selectionMode, setSelectionMode] = useState(false);
   const [selection, setSelection] = useState<string[]>([]);
   const selectionRef = useRef(selection);
   selectionRef.current = selection;
@@ -204,16 +201,18 @@ export default function App() {
   const draggedTab = useRef<string | null>(null);
   const explorerTyping = useRef({ value: "", time: 0 });
   const closedTabs = useRef<ClosedTab[]>([]);
+  const [reopeningClosed, setReopeningClosed] = useState(false);
   const navigation = useRef(new NavigationHistory());
   const editorInteraction = useRef(0);
   const navigationToken = useRef(0),
     transitioning = useRef(false);
-  const [, redrawNavigation] = useState(0);
+  const [navigationRevision, redrawNavigation] = useState(0);
   const [sidebarMode, setSidebarMode] = useState<"files" | "search">("files");
   const [searchOptions, setSearchOptions] = useState(emptySearch);
   const [settings, setSettings] = useState(initialSettings),
     settingsRef = useRef(settings);
   settingsRef.current = settings;
+  const [defaultSettings, setDefaultSettings] = useState(initialSettings);
   const [spellcheck, setSpellcheck] = useState<SpellcheckInfo | null>(null);
   const [root, setRoot] = useState(""),
     rootRef = useRef(root);
@@ -444,14 +443,52 @@ export default function App() {
       const next = await window.margin.settings(patch);
       settingsRef.current = next;
       setSettings(next);
+      return true;
     } catch (e) {
       if (optimistic) {
         settingsRef.current = previous;
         setSettings(previous);
       }
       fail(e);
+      return false;
     }
   };
+  async function resetPreferences(categories: string[]) {
+    const groups = preferenceCategories.filter((item) =>
+      categories.includes(item.id),
+    );
+    const title = groups.map((group) => group.title).join(", ");
+    const choice = await ask({
+      title: "Restore default preferences?",
+      description: `Restore ${title} to the application defaults. Changes apply immediately, including autosave and history retention when selected.`,
+      choices: [
+        { id: "restore", label: "Restore defaults", primary: true },
+        { id: "cancel", label: "Cancel" },
+      ],
+    });
+    if (choice !== "restore") return;
+    const patch: Partial<Settings> = Object.fromEntries(
+      groups.flatMap((group) =>
+        group.keys.map((key) => [key, defaultSettings[key]]),
+      ),
+    );
+    const changesIgnored =
+      patch.ignored &&
+      JSON.stringify(patch.ignored) !==
+        JSON.stringify(settingsRef.current.ignored);
+    if (
+      changesIgnored &&
+      !(await settleEdits("Restoring workspace exclusions"))
+    )
+      return;
+    if (await updateSettings(patch)) {
+      if (changesIgnored) {
+        setTerminalTabs([]);
+        await refreshTree();
+      }
+      notify("Default preferences restored.");
+    }
+  }
   const persist = async () => {
     if (rootRef.current && !transitioning.current) {
       capturePosition();
@@ -481,6 +518,7 @@ export default function App() {
     navigationToken.current++;
     setSplit(null);
     setHistoryPath("");
+    setSelectionMode(false);
     setSelection([]);
     positions.current = new Map(
       (opened.session?.tabs || []).flatMap((tab) =>
@@ -581,6 +619,7 @@ export default function App() {
     void window.margin
       .bootstrap()
       .then(async (data) => {
+        setDefaultSettings(data.defaults);
         setSettings(data.settings);
         settingsRef.current = data.settings;
         setRecent(data.recent);
@@ -609,7 +648,7 @@ export default function App() {
     if (!root || loading) return;
     const timer = setTimeout(() => void persist().catch(fail), 350);
     return () => clearTimeout(timer);
-  }, [tabs, active, expanded, root, loading, split]);
+  }, [tabs, active, expanded, root, loading, split, navigationRevision]);
   useEffect(() => {
     let timer: ReturnType<typeof setTimeout>;
     const changed = (event: Event) => {
@@ -772,11 +811,17 @@ export default function App() {
             .map((tab) => [tab.path, capturePosition(tab.path)]),
         );
         if (pdfPositions.size)
-          changeTabs((previous) => previous.map((tab) =>
-            pdfPositions.has(tab.path)
-              ? { ...tab, position: pdfPositions.get(tab.path), version: tab.version + 1 }
-              : tab,
-          ));
+          changeTabs((previous) =>
+            previous.map((tab) =>
+              pdfPositions.has(tab.path)
+                ? {
+                    ...tab,
+                    position: pdfPositions.get(tab.path),
+                    version: tab.version + 1,
+                  }
+                : tab,
+            ),
+          );
         void refreshTree().catch(fail);
         void reloadTabs().catch(fail);
       }),
@@ -969,7 +1014,7 @@ export default function App() {
   function compareFiles(right?: string, left?: string) {
     const pair = splitRef.current;
     const current = activeRef.current;
-    const textPath = (path: string) => isReadOnlyPreview(path) ? "" : path;
+    const textPath = (path: string) => (isReadOnlyPreview(path) ? "" : path);
     setComparison({
       left: left ?? textPath(pair && !right ? pair.left : current),
       right: right ?? textPath(pair?.right || ""),
@@ -991,35 +1036,41 @@ export default function App() {
     redrawNavigation((value) => value + 1);
   }
   async function reopenClosed(path?: string) {
+    if (reopeningClosed) return;
     const index = path
       ? closedTabs.current.map((tab) => tab.path).lastIndexOf(path)
       : closedTabs.current.length - 1;
     if (index < 0) return;
     const saved = closedTabs.current[index];
-    if (
-      !(await openFile(saved.path, undefined, {
-        position: saved.position,
-        mode: saved.mode,
-      }))
-    )
-      return;
-    closedTabs.current.splice(index, 1);
-    changeTabs((previous) => {
-      const tab = previous.find((tab) => tab.path === saved.path)!;
-      const remaining = previous.filter((entry) => entry !== tab);
-      const pinnedCount = remaining.filter((tab) => tab.pinned).length;
-      const reopened = { ...tab, pinned: saved.pinned };
-      remaining.splice(
-        saved.pinned
-          ? Math.min(saved.index, pinnedCount)
-          : Math.max(pinnedCount, Math.min(saved.index, remaining.length)),
-        0,
-        reopened,
-      );
-      return remaining;
-    });
-    redrawNavigation((value) => value + 1);
-    await persist();
+    setReopeningClosed(true);
+    try {
+      if (
+        !(await openFile(saved.path, undefined, {
+          position: saved.position,
+          mode: saved.mode,
+        }))
+      )
+        return;
+      closedTabs.current.splice(index, 1);
+      changeTabs((previous) => {
+        const tab = previous.find((tab) => tab.path === saved.path)!;
+        const remaining = previous.filter((entry) => entry !== tab);
+        const pinnedCount = remaining.filter((tab) => tab.pinned).length;
+        const reopened = { ...tab, pinned: saved.pinned };
+        remaining.splice(
+          saved.pinned
+            ? Math.min(saved.index, pinnedCount)
+            : Math.max(pinnedCount, Math.min(saved.index, remaining.length)),
+          0,
+          reopened,
+        );
+        return remaining;
+      });
+      redrawNavigation((value) => value + 1);
+      await persist();
+    } finally {
+      setReopeningClosed(false);
+    }
   }
   async function findInDocument(replace = false) {
     const tab = tabsRef.current.find((tab) => tab.path === activeRef.current);
@@ -1125,6 +1176,7 @@ export default function App() {
     kind: "single" | "toggle" | "range" = "single",
   ) {
     setSelected(path);
+    setSelectionMode(kind !== "single");
     if (kind === "single") {
       selectionAnchor.current = path;
       selectionRef.current = [path];
@@ -1319,10 +1371,12 @@ export default function App() {
       restoreFocus: () => target.isConnected && target.focus(),
       items: [
         ...(!path || entry?.directory || isMarkdown(path)
-          ? [{
-              label: "Export to PDF…",
-              run: () => showPdfExport(path, !path || !!entry?.directory),
-            }]
+          ? [
+              {
+                label: "Export to PDF…",
+                run: () => showPdfExport(path, !path || !!entry?.directory),
+              },
+            ]
           : []),
         ...(entry && !entry.directory && isBrowserFile(path)
           ? [
@@ -1338,21 +1392,31 @@ export default function App() {
         path !== activeRef.current
           ? [{ label: "Open beside current", run: () => openBeside(path) }]
           : []),
-        ...(path && !entry?.directory && !isReadOnlyPreview(path) &&
-        activeRef.current && path !== activeRef.current &&
+        ...(path &&
+        !entry?.directory &&
+        !isReadOnlyPreview(path) &&
+        activeRef.current &&
+        path !== activeRef.current &&
         !isReadOnlyPreview(activeRef.current)
-          ? [{
-              label: "Compare with current file",
-              run: () => compareFiles(path),
-            }]
+          ? [
+              {
+                label: "Compare with current file",
+                run: () => compareFiles(path),
+              },
+            ]
           : []),
-        ...(selectedPaths.length === 2 && selectedPaths.every((name) =>
-          entries.some((entry) => entry.path === name && !entry.directory) &&
-          !isReadOnlyPreview(name))
-          ? [{
-              label: "Compare selected files",
-              run: () => compareFiles(selectedPaths[1], selectedPaths[0]),
-            }]
+        ...(selectedPaths.length === 2 &&
+        selectedPaths.every(
+          (name) =>
+            entries.some((entry) => entry.path === name && !entry.directory) &&
+            !isReadOnlyPreview(name),
+        )
+          ? [
+              {
+                label: "Compare selected files",
+                run: () => compareFiles(selectedPaths[1], selectedPaths[0]),
+              },
+            ]
           : []),
         ...(selectedPaths.length > 1
           ? [
@@ -1416,7 +1480,9 @@ export default function App() {
         { label: "Open beside current", run: () => openBeside(path) },
         {
           label: "Compare with current file",
-          disabled: path === activeRef.current || isReadOnlyPreview(path) ||
+          disabled:
+            path === activeRef.current ||
+            isReadOnlyPreview(path) ||
             isReadOnlyPreview(activeRef.current),
           run: () => compareFiles(path),
         },
@@ -2151,7 +2217,13 @@ export default function App() {
         ]
       : []),
     ...(current && isPDF(current.path)
-      ? [{ name: "Find in PDF", shortcut: `${keyboard}+F`, run: () => findInDocument() }]
+      ? [
+          {
+            name: "Find in PDF",
+            shortcut: `${keyboard}+F`,
+            run: () => findInDocument(),
+          },
+        ]
       : []),
     ...(closedTabs.current.length
       ? [
@@ -2202,10 +2274,14 @@ export default function App() {
             name: "Compare files",
             run: () => compareFiles(),
           },
-          ...(!isReadOnlyPreview(current.path) ? [{
-            name: "Local version history",
-            run: () => showHistory(current.path),
-          }] : []),
+          ...(!isReadOnlyPreview(current.path)
+            ? [
+                {
+                  name: "Local version history",
+                  run: () => showHistory(current.path),
+                },
+              ]
+            : []),
         ]
       : []),
     ...(current && current.mode === "source" && supportsFormatting(current.path)
@@ -2273,7 +2349,13 @@ export default function App() {
     ? []
     : palette === "commands"
       ? commands
-          .filter((c) => c.name.toLowerCase().includes(query.toLowerCase()))
+          .filter((command) =>
+            query
+              .toLowerCase()
+              .trim()
+              .split(/\s+/)
+              .every((term) => command.name.toLowerCase().includes(term)),
+          )
           .map((c) => ({ label: c.name, detail: c.shortcut, run: c.run }))
       : rankedFiles.map((entry) => ({
           label: entry.name,
@@ -2316,7 +2398,8 @@ export default function App() {
   );
   function focusExplorer(path: string, extend = false) {
     if (!path) return;
-    chooseSelection(path, extend ? "range" : "single");
+    if (selectionMode && !extend) setSelected(path);
+    else chooseSelection(path, extend ? "range" : "single");
     requestAnimationFrame(() => {
       const row = Array.from(
         document.querySelectorAll<HTMLElement>('[role="treeitem"]'),
@@ -2333,6 +2416,7 @@ export default function App() {
       event.preventDefault();
       event.stopPropagation();
       const paths = displayedEntries.slice(0, 100).map((entry) => entry.path);
+      setSelectionMode(true);
       selectionRef.current = paths;
       setSelection(paths);
       if (displayedEntries.length > 100)
@@ -2340,7 +2424,7 @@ export default function App() {
       return;
     }
     if (event.altKey || event.metaKey || event.ctrlKey) return;
-    if (event.key === "Escape" && selectionRef.current.length > 1) {
+    if (event.key === "Escape" && selectionMode) {
       event.preventDefault();
       event.stopPropagation();
       chooseSelection(selected);
@@ -2391,6 +2475,10 @@ export default function App() {
       event.stopPropagation();
       if (!entry) {
         focus(0);
+        return;
+      }
+      if (event.key === " " && selectionMode) {
+        chooseSelection(entry.path, "toggle");
         return;
       }
       if (entry.directory)
@@ -2460,6 +2548,12 @@ export default function App() {
     <div
       className={"application" + (settings.focusMode ? " focus-mode" : "")}
       ref={appRef}
+      onFocusCapture={(event) => {
+        // Toolbar, dialog and explorer focus takes precedence over a pending
+        // document activation, including navigation initiated by the keyboard.
+        if (!(event.target as HTMLElement).closest(".editor-pane"))
+          editorInteraction.current++;
+      }}
       style={
         {
           "--reading-font-size": settings.readingFontSize + "px",
@@ -2497,7 +2591,7 @@ export default function App() {
           }}
         >
           <Search size={15} />
-          <span>Go to a file or command…</span>
+          <span>Search files, contents or commands…</span>
           <kbd>{keyboard} P</kbd>
         </button>
         <div className="header-actions">
@@ -2685,6 +2779,20 @@ export default function App() {
                     </button>
                     <button
                       className="icon-button small"
+                      aria-label="Select files"
+                      aria-pressed={selectionMode}
+                      disabled={!root}
+                      data-tooltip="Select files for batch actions"
+                      onClick={() => {
+                        setSelectionMode(!selectionMode);
+                        setSelection([]);
+                        selectionRef.current = [];
+                      }}
+                    >
+                      <ListChecks />
+                    </button>
+                    <button
+                      className="icon-button small"
                       aria-label="New folder"
                       data-tooltip="New folder"
                       onClick={() => void createEntry(true)}
@@ -2710,29 +2818,36 @@ export default function App() {
                       </button>
                     )}
                   </label>
-                  {selection.length > 0 && (
-                    <div className="selection-actions">
-                      <span>{selection.length} selected</span>
+                  {selectionMode && (
+                    <div
+                      className="selection-actions"
+                      role="group"
+                      aria-label="Batch file actions"
+                    >
+                      <span role="status">{selection.length} selected</span>
                       <button
                         aria-label="Move selected items"
+                        disabled={!selection.length}
                         onClick={() => void moveSelected()}
                       >
                         Move…
                       </button>
                       <button
                         aria-label="Trash selected items"
+                        disabled={!selection.length}
                         onClick={() => void trashSelected()}
                       >
                         Trash…
                       </button>
                       <button
-                        aria-label="Clear explorer selection"
+                        aria-label="Done selecting files"
                         onClick={() => {
                           setSelection([]);
                           selectionRef.current = [];
+                          setSelectionMode(false);
                         }}
                       >
-                        Clear
+                        Done
                       </button>
                     </div>
                   )}
@@ -2860,11 +2975,16 @@ export default function App() {
                             entry.path,
                             event.shiftKey
                               ? "range"
-                              : event.metaKey || event.ctrlKey
+                              : event.metaKey || event.ctrlKey || selectionMode
                                 ? "toggle"
                                 : "single",
                           );
-                          if (event.shiftKey || event.metaKey || event.ctrlKey)
+                          if (
+                            event.shiftKey ||
+                            event.metaKey ||
+                            event.ctrlKey ||
+                            selectionMode
+                          )
                             return;
                           if (entry.directory)
                             setExpanded((previous) =>
@@ -2991,7 +3111,11 @@ export default function App() {
           }}
         >
           <div className="tabs-bar">
-            <div className="navigation-buttons">
+            <div
+              className="navigation-buttons"
+              role="group"
+              aria-label="Navigation"
+            >
               <button
                 className="icon-button small"
                 aria-label="Navigate back"
@@ -3167,20 +3291,31 @@ export default function App() {
               </button>
             </div>
             {current && (
-              <div className="document-actions">
-                {isReadOnlyPreview(current.path) ? (
-                  <span className="save-state">Read-only</span>
-                ) : current.dirty ? (
-                  <span className="save-state">Unsaved</span>
-                ) : (
-                  <span className="save-state">
-                    <Check size={12} /> Saved
-                  </span>
-                )}
+              <div
+                className="document-actions"
+                role="group"
+                aria-label="Writing"
+              >
+                <span className="save-status" role="status" aria-live="polite">
+                  {isReadOnlyPreview(current.path) ? (
+                    <span className="save-state">Read-only</span>
+                  ) : current.dirty ? (
+                    <span className="save-state">Unsaved</span>
+                  ) : (
+                    <span className="save-state">
+                      <Check size={12} /> Saved
+                    </span>
+                  )}
+                </span>
                 {supportsVisualMode(current.path) && (
-                  <div className="mode-switch">
+                  <div
+                    className="mode-switch"
+                    role="group"
+                    aria-label="Editing mode"
+                  >
                     <button
                       aria-label="Visual mode"
+                      aria-pressed={current.mode === "visual"}
                       className={current.mode === "visual" ? "active" : ""}
                       onClick={() => {
                         if (current.mode !== "visual") void toggleMode(current);
@@ -3195,6 +3330,7 @@ export default function App() {
                     </button>
                     <button
                       aria-label={`${previewType(current.path) ?? "Markdown"} source mode`}
+                      aria-pressed={current.mode === "source"}
                       className={current.mode === "source" ? "active" : ""}
                       onClick={() => {
                         if (current.mode !== "source") void toggleMode(current);
@@ -3215,15 +3351,6 @@ export default function App() {
                 </button>
               </div>
             )}
-            <button
-              className="icon-button small"
-              aria-label="Reopen closed tab"
-              data-tooltip={`Reopen closed tab (${keyboard}+Shift+T)`}
-              disabled={!closedTabs.current.length}
-              onClick={() => void reopenClosed()}
-            >
-              <RotateCcw />
-            </button>
             {current && (
               <button
                 className="icon-button"
@@ -3232,26 +3359,6 @@ export default function App() {
                 onClick={() => (split ? setSplit(null) : void openBeside())}
               >
                 <Columns2 />
-              </button>
-            )}
-            {root && (
-              <button
-                className="icon-button"
-                aria-label="Compare files"
-                data-tooltip="Compare files"
-                onClick={() => compareFiles()}
-              >
-                <FileDiff />
-              </button>
-            )}
-            {current && !isReadOnlyPreview(current.path) && (
-              <button
-                className="icon-button"
-                aria-label="Local version history"
-                data-tooltip="Local version history"
-                onClick={() => void showHistory(current.path)}
-              >
-                <History />
               </button>
             )}
             {root && (
@@ -3267,6 +3374,70 @@ export default function App() {
                 <ListTree />
               </button>
             )}
+            <button
+              className="document-menu-button"
+              aria-label="Document actions"
+              aria-haspopup="menu"
+              disabled={
+                reopeningClosed || (!root && !closedTabs.current.length)
+              }
+              onClick={(event) => {
+                const button = event.currentTarget;
+                const rect = button.getBoundingClientRect();
+                openMenu({
+                  x: rect.left,
+                  y: rect.bottom + 4,
+                  restoreFocus: () => button.focus(),
+                  items: [
+                    ...(current && !isReadOnlyPreview(current.path)
+                      ? [
+                          {
+                            label: "Save as…",
+                            run: () => saveAs(current.path, false),
+                          },
+                          {
+                            label: "Save a copy…",
+                            run: () => saveAs(current.path, true),
+                          },
+                          ...(isMarkdown(current.path)
+                            ? [
+                                {
+                                  label: "Export to PDF…",
+                                  run: () =>
+                                    setPdfSource({
+                                      path: current.path,
+                                      directory: false,
+                                      label: current.path,
+                                    }),
+                                },
+                              ]
+                            : []),
+                          {
+                            label: "Local version history",
+                            run: () => showHistory(current.path),
+                          },
+                          null,
+                        ]
+                      : []),
+                    {
+                      label: "Compare files",
+                      disabled: !root,
+                      run: () => compareFiles(),
+                    },
+                    {
+                      label: "Reopen closed tab",
+                      shortcut: keyboard + "+Shift+T",
+                      disabled: !closedTabs.current.length,
+                      run: () => reopenClosed(),
+                    },
+                  ],
+                });
+              }}
+            >
+              <MoreHorizontal size={16} />
+              <span>Document</span>
+              <ChevronDown size={12} />
+            </button>
           </div>
           {recovery.length > 0 && (
             <div className="recovery-banner">
@@ -3356,12 +3527,22 @@ export default function App() {
                   </div>
                 )}
                 {isPDF(tab.path) ? (
-                  <Suspense fallback={<div className="pdf-notice" role="status">Loading PDF viewer…</div>}>
+                  <Suspense
+                    fallback={
+                      <div className="pdf-notice" role="status">
+                        Loading PDF viewer…
+                      </div>
+                    }
+                  >
                     <PdfPreview
                       key={root + ":" + tab.path}
                       path={tab.path}
                       position={positions.current.get(tab.path) || tab.position}
-                      visible={active === tab.path || split?.left === tab.path || split?.right === tab.path}
+                      visible={
+                        active === tab.path ||
+                        split?.left === tab.path ||
+                        split?.right === tab.path
+                      }
                     />
                   </Suspense>
                 ) : isImage(tab.path) ? (
@@ -3701,6 +3882,47 @@ export default function App() {
             aria-modal="true"
             aria-label={palette === "files" ? "Quick open" : "Command palette"}
           >
+            {!paletteBeside.current && (
+              <nav className="search-scopes" aria-label="Search scope">
+                <button
+                  aria-pressed={palette === "files"}
+                  onClick={() => {
+                    setPalette("files");
+                    setPaletteIndex(0);
+                    requestAnimationFrame(() =>
+                      document
+                        .querySelector<HTMLInputElement>(".palette-input input")
+                        ?.focus(),
+                    );
+                  }}
+                >
+                  Files
+                </button>
+                <button
+                  onClick={() => {
+                    setSearchOptions((previous) => ({ ...previous, query }));
+                    setPalette(null);
+                    showWorkspaceSearch();
+                  }}
+                >
+                  Contents
+                </button>
+                <button
+                  aria-pressed={palette === "commands"}
+                  onClick={() => {
+                    setPalette("commands");
+                    setPaletteIndex(0);
+                    requestAnimationFrame(() =>
+                      document
+                        .querySelector<HTMLInputElement>(".palette-input input")
+                        ?.focus(),
+                    );
+                  }}
+                >
+                  Commands
+                </button>
+              </nav>
+            )}
             <div className="palette-input">
               {palette === "files" ? (
                 <Search size={19} />
@@ -3783,7 +4005,6 @@ export default function App() {
               <button
                 onClick={() => {
                   setPalette(palette === "files" ? "commands" : "files");
-                  setQuery("");
                   setPaletteIndex(0);
                 }}
               >
@@ -3830,431 +4051,31 @@ export default function App() {
         />
       )}
       {showSettings && (
-        <div
-          className="modal-scrim"
-          onMouseDown={(e) => {
-            if (e.target === e.currentTarget) setShowSettings(false);
+        <PreferencesDialog
+          settings={settings}
+          spellcheck={spellcheck}
+          recovery={recovery}
+          keyboard={keyboard}
+          updateSettings={updateSettings}
+          onIgnoredChange={async (ignored) => {
+            if (!(await settleEdits("Changing workspace exclusions"))) return;
+            if (await updateSettings({ ignored })) {
+              setTerminalTabs([]);
+              await refreshTree();
+            }
           }}
-        >
-          <div
-            className="settings-dialog"
-            role="dialog"
-            aria-modal="true"
-            aria-label="Preferences"
-          >
-            <div className="dialog-heading">
-              <div>
-                <span className="eyebrow">MAKE YOURSELF AT HOME</span>
-                <h2>Preferences</h2>
-              </div>
-              <button
-                className="icon-button"
-                autoFocus
-                aria-label="Close preferences"
-                onClick={() => setShowSettings(false)}
-              >
-                <X />
-              </button>
-            </div>
-            <div className="settings-content">
-              <div className="settings-section">
-                <h3>Appearance & editing</h3>
-                <label>
-                  Automatically format code on open
-                  <input
-                    type="checkbox"
-                    aria-label="Automatically format code on open"
-                    checked={settings.formatOnOpen}
-                    onChange={(event) => {
-                      const formatOnOpen = event.target.checked;
-                      setSettings((previous) => ({
-                        ...previous,
-                        formatOnOpen,
-                      }));
-                      void updateSettings({ formatOnOpen });
-                    }}
-                  />
-                </label>
-                <p>
-                  Format supported code with your indentation setting when
-                  opening it. Formatting is undoable and follows your autosave
-                  policy. Unsupported or invalid code is kept unchanged.
-                </p>
-                <label>
-                  Color theme
-                  <select
-                    value={settings.theme}
-                    onChange={(e) =>
-                      void updateSettings({
-                        theme: e.target.value as Settings["theme"],
-                      })
-                    }
-                  >
-                    <option value="light">Daylight · light</option>
-                    <option value="dark">Nightfall · dark</option>
-                  </select>
-                </label>
-                <label>
-                  Code font size
-                  <select
-                    value={settings.fontSize}
-                    onChange={(e) =>
-                      void updateSettings({ fontSize: Number(e.target.value) })
-                    }
-                  >
-                    {[12, 13, 14, 15, 16, 18, 20, 24].map((n) => (
-                      <option key={n} value={n}>
-                        {n} px
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                <label>
-                  Reading font size
-                  <select
-                    aria-label="Reading font size"
-                    value={settings.readingFontSize}
-                    onChange={(event) =>
-                      void updateSettings({
-                        readingFontSize: Number(event.target.value),
-                      })
-                    }
-                  >
-                    {[14, 15, 16, 17, 18, 20, 22, 24, 28, 32].map((size) => (
-                      <option key={size} value={size}>
-                        {size} px
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                <label>
-                  Reading line height
-                  <select
-                    aria-label="Reading line height"
-                    value={settings.readingLineHeight}
-                    onChange={(event) =>
-                      void updateSettings({
-                        readingLineHeight: Number(event.target.value),
-                      })
-                    }
-                  >
-                    {[1.3, 1.5, 1.65, 1.85, 2, 2.25, 2.5].map((size) => (
-                      <option key={size} value={size}>
-                        {size}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                <label>
-                  Reading text width
-                  <select
-                    aria-label="Reading text width"
-                    value={settings.readingWidth}
-                    onChange={(event) =>
-                      void updateSettings({
-                        readingWidth: Number(event.target.value),
-                      })
-                    }
-                  >
-                    {[560, 680, 820, 960, 1100, 1200].map((size) => (
-                      <option key={size} value={size}>
-                        {size} px
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                <label>
-                  Indentation
-                  <select
-                    aria-label="Indentation"
-                    value={settings.indentSize}
-                    onChange={(e) =>
-                      void updateSettings({
-                        indentSize: Number(e.target.value),
-                      })
-                    }
-                  >
-                    {[2, 4, 8].map((n) => (
-                      <option key={n} value={n}>
-                        {n} spaces
-                      </option>
-                    ))}
-                  </select>
-                </label>
-              </div>
-              <div className="settings-section">
-                <h3>Spelling</h3>
-                <label>
-                  Check spelling in visual Markdown
-                  <input
-                    type="checkbox"
-                    aria-label="Check spelling"
-                    checked={settings.spellcheckEnabled}
-                    onChange={(event) =>
-                      void updateSettings(
-                        {
-                          spellcheckEnabled: event.target.checked,
-                        },
-                        true,
-                      )
-                    }
-                  />
-                </label>
-                <label>
-                  Spellcheck language
-                  <select
-                    aria-label="Spellcheck language"
-                    value={settings.spellcheckLanguage}
-                    disabled={!settings.spellcheckEnabled || !spellcheck}
-                    onChange={(event) =>
-                      void updateSettings({
-                        spellcheckLanguage: event.target.value,
-                      })
-                    }
-                  >
-                    <option value="system">
-                      System language
-                      {spellcheck
-                        ? ` · ${spellingLanguageName(spellcheck.systemLanguage)}`
-                        : ""}
-                    </option>
-                    {[...(spellcheck?.languages || [])]
-                      .sort((a, b) =>
-                        spellingLanguageName(a).localeCompare(
-                          spellingLanguageName(b),
-                        ),
-                      )
-                      .map((code) => (
-                        <option key={code} value={code}>
-                          {spellingLanguageName(code)}
-                        </option>
-                      ))}
-                  </select>
-                </label>
-                <p>
-                  Check all text in visual Markdown, including headings, lists
-                  and tables. Inline code and code blocks are skipped. Changes
-                  apply immediately. Dutch, English (US/UK), French and German
-                  dictionaries are included. Checks run locally and work
-                  offline.
-                </p>
-                {settings.spellcheckEnabled &&
-                  spellcheck?.status !== "ready" && (
-                    <p role="status">
-                      {spellcheck?.status === "error"
-                        ? "The spelling dictionary could not be loaded. Turn spelling off and on to retry."
-                        : "Loading the spelling dictionary… Text will be checked automatically when it is ready."}
-                    </p>
-                  )}
-              </div>
-              <div className="settings-section">
-                <h3>Saving & recovery</h3>
-                <label className="checkbox-setting">
-                  <input
-                    type="checkbox"
-                    aria-label="Keep local version history"
-                    checked={settings.historyEnabled}
-                    onChange={(event) =>
-                      void updateSettings({
-                        historyEnabled: event.target.checked,
-                      })
-                    }
-                  />
-                  Keep local version history
-                </label>
-                <label>
-                  History storage limit
-                  <select
-                    aria-label="History storage limit"
-                    value={settings.historyLimitMB}
-                    onChange={(event) =>
-                      void updateSettings({
-                        historyLimitMB: Number(event.target.value),
-                      })
-                    }
-                  >
-                    {[10, 25, 50, 100, 250, 500, 1000].map((size) => (
-                      <option key={size} value={size}>
-                        {size} MB
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                <label>
-                  Versions per file
-                  <select
-                    aria-label="Versions per file"
-                    value={settings.historyVersions}
-                    onChange={(event) =>
-                      void updateSettings({
-                        historyVersions: Number(event.target.value),
-                      })
-                    }
-                  >
-                    {[5, 10, 20, 50, 100].map((size) => (
-                      <option key={size} value={size}>
-                        {size}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                <p>
-                  Earlier saved text stays in local application data. Limits
-                  apply across workspaces. Lowering a limit removes the oldest
-                  versions; disabling history stops new snapshots and retains
-                  existing versions.
-                </p>
-                <label>
-                  Autosave policy
-                  <select
-                    aria-label="Autosave policy"
-                    value={settings.autosave}
-                    onChange={(e) =>
-                      void updateSettings({
-                        autosave: e.target.value as Settings["autosave"],
-                      })
-                    }
-                  >
-                    <option value="afterDelay">After a pause</option>
-                    <option value="onBlur">When window loses focus</option>
-                    <option value="off">Manual save</option>
-                  </select>
-                </label>
-                <label>
-                  Autosave delay
-                  <select
-                    value={settings.autosaveDelay}
-                    onChange={(e) =>
-                      void updateSettings({
-                        autosaveDelay: Number(e.target.value),
-                      })
-                    }
-                  >
-                    {[500, 1000, 1500, 3000, 5000, 10000].map((n) => (
-                      <option key={n} value={n}>
-                        {n / 1000} seconds
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                <p>
-                  Recovery drafts are saved separately from your files. External
-                  modifications are never silently overwritten.
-                </p>
-                <button
-                  className="text-button"
-                  onClick={() => void window.margin.openRecovery()}
-                >
-                  Open file-operation recovery folder <ArrowUpRight size={14} />
-                </button>
-                {recovery.map((r) => (
-                  <p className="danger-text" key={r.file}>
-                    {r.file}
-                    <br />
-                    {r.message}
-                  </p>
-                ))}
-              </div>
-              <div className="settings-section">
-                <h3>Images & attachments</h3>
-                <label>
-                  Storage location
-                  <select
-                    aria-label="Attachment location"
-                    value={settings.attachmentMode}
-                    onChange={(e) =>
-                      void updateSettings({
-                        attachmentMode: e.target
-                          .value as Settings["attachmentMode"],
-                      })
-                    }
-                  >
-                    <option value="workspace">
-                      Relative to workspace root
-                    </option>
-                    <option value="nearby">
-                      Relative to the Markdown file
-                    </option>
-                  </select>
-                </label>
-                <label>
-                  Folder path
-                  <input
-                    aria-label="Attachment folder"
-                    defaultValue={settings.attachmentFolder}
-                    placeholder="assets"
-                    onBlur={(e) => {
-                      if (e.target.value !== settings.attachmentFolder)
-                        void updateSettings({
-                          attachmentFolder: e.target.value,
-                        });
-                    }}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter") e.currentTarget.blur();
-                    }}
-                  />
-                </label>
-                <p>
-                  Paste screenshots with {keyboard}+V, use the image button, or
-                  drop images into a visual document. PNG, JPEG, GIF and WebP
-                  images are saved as ordinary files with portable relative
-                  paths.
-                </p>
-              </div>
-              <div className="settings-section">
-                <h3>Workspace filtering</h3>
-                <label className="stacked">
-                  Ignored folder and file names
-                  <input
-                    aria-label="Ignored directories"
-                    defaultValue={settings.ignored.join(", ")}
-                    onBlur={(e) => {
-                      const ignored = e.target.value
-                        .split(",")
-                        .map((v) => v.trim())
-                        .filter(Boolean);
-                      if (
-                        JSON.stringify(ignored) !==
-                        JSON.stringify(settings.ignored)
-                      )
-                        void (async () => {
-                          if (
-                            !(await settleEdits(
-                              "Changing workspace exclusions",
-                            ))
-                          )
-                            return;
-                          await updateSettings({ ignored });
-                          setTerminalTabs([]);
-                          await refreshTree();
-                        })();
-                    }}
-                  />
-                </label>
-                <p>
-                  Comma-separated exact names. These directories are excluded
-                  from the explorer, watcher, and reference updates. Links
-                  inside excluded notes are not managed. The .git directory is
-                  always excluded.
-                </p>
-              </div>
-              <div className="settings-about">
-                <BookOpen size={24} />
-                <div>
-                  <strong>Margin 1.1</strong>
-                  <span>A workspace for words and work.</span>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
+          onReset={resetPreferences}
+          onClose={() => setShowSettings(false)}
+        />
       )}
       {pdfSource && (
         <PdfExportDialog
           {...pdfSource}
-          overlays={() => tabsRef.current
-            .filter((tab) => isMarkdown(tab.path))
-            .map((tab) => ({ path: tab.path, text: tab.text }))}
+          overlays={() =>
+            tabsRef.current
+              .filter((tab) => isMarkdown(tab.path))
+              .map((tab) => ({ path: tab.path, text: tab.text }))
+          }
           onClose={() => setPdfSource(null)}
         />
       )}

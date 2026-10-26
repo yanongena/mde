@@ -26,6 +26,10 @@ export function Tooltip() {
       const next = (event.target as Element).closest<HTMLElement>(
         "[data-tooltip], button[aria-label]",
       );
+      // Finishing an asynchronous editor activation must not dismiss a hint
+      // the user is currently hovering in another part of the interface.
+      if (event.type === "focusin" && !next && anchor?.matches(":hover"))
+        return;
       if (next === anchor) return;
       hide();
       if (!next || next.closest("[inert]")) return;
@@ -38,6 +42,8 @@ export function Tooltip() {
       );
     };
     const leave = (event: Event) => {
+      if (event.type === "focusout" && !anchor?.contains(event.target as Node))
+        return;
       const related = (event as PointerEvent | FocusEvent)
         .relatedTarget as Node | null;
       if (
@@ -103,9 +109,12 @@ export function Tooltip() {
         ),
       ),
       top:
-        bounds.bottom + tooltip.height + 16 <= window.innerHeight
-          ? bounds.bottom + 8
-          : Math.max(8, bounds.top - tooltip.height - 8),
+        bounds.top >= tooltip.height + 16
+          ? bounds.top - tooltip.height - 8
+          : Math.min(
+              window.innerHeight - tooltip.height - 8,
+              bounds.bottom + 8,
+            ),
     });
     const previous = target.getAttribute("aria-describedby");
     target.setAttribute(

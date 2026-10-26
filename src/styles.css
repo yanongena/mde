@@ -14,8 +14,8 @@
   --hover: #e9eee6;
   --line: #e3e7df;
   --text: #303c35;
-  --muted: #859083;
-  --quiet: #697768;
+  --muted: #616f63;
+  --quiet: #536454;
   --accent: #357456;
   --accent-bg: #e7f0e7;
   --code: #f2f4ef;
@@ -36,7 +36,7 @@
   --hover: #303b35;
   --line: #303a36;
   --text: #d8e0d8;
-  --muted: #85958b;
+  --muted: #a1b3a7;
   --quiet: #a0b1a3;
   --accent: #9bc9a9;
   --accent-bg: #2b4033;
@@ -161,7 +161,7 @@ button.danger {
 }
 kbd {
   font-family: inherit;
-  font-size: 10px;
+  font-size: 11px;
   border: 1px solid var(--line);
   background: var(--surface);
   border-radius: 4px;
@@ -170,7 +170,7 @@ kbd {
   white-space: nowrap;
 }
 .eyebrow {
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 650;
   letter-spacing: 1.7px;
   color: var(--quiet);
@@ -221,7 +221,7 @@ kbd {
   min-width: 150px;
 }
 .workspace-badge {
-  font-size: 8px;
+  font-size: 11px;
   letter-spacing: 1px;
   font-weight: 650;
 }
@@ -329,7 +329,7 @@ kbd {
   gap: 4px;
   color: var(--quiet);
   font-weight: 650;
-  font-size: 9px;
+  font-size: 11px;
   letter-spacing: 1.5px;
   flex-shrink: 0;
 }
@@ -450,7 +450,7 @@ kbd {
 .explorer-drop-status span {
   margin-top: 4px;
   color: var(--quiet);
-  font-size: 10px;
+  font-size: 11px;
 }
 .explorer-drop-status.invalid {
   color: var(--quiet);
@@ -597,7 +597,7 @@ kbd {
   border-top: 1px solid var(--line);
   padding: 12px 16px;
   color: var(--muted);
-  font-size: 10px;
+  font-size: 11px;
 }
 .resize-handle {
   position: relative;
@@ -704,7 +704,7 @@ kbd {
   border-left: 1px solid var(--line);
   display: flex;
   align-items: center;
-  gap: 14px;
+  gap: 8px;
   flex-shrink: 0;
 }
 .save-state {
@@ -712,7 +712,7 @@ kbd {
   align-items: center;
   gap: 4px;
   color: var(--muted);
-  font-size: 10px;
+  font-size: 12px;
 }
 .mode-switch {
   border: 1px solid var(--line);
@@ -725,7 +725,7 @@ kbd {
   padding: 4px 9px;
   border: 0;
   background: none;
-  font-size: 10px;
+  font-size: 11px;
   color: var(--muted);
   gap: 5px;
   border-radius: 4px;
@@ -790,7 +790,7 @@ kbd {
   color: var(--quiet);
   background: none;
   min-width: 27px;
-  font-size: 10px;
+  font-size: 11px;
 }
 .tool-button svg {
   height: 15px;
@@ -809,7 +809,7 @@ kbd {
   padding: 4px 22px;
   background: var(--surface);
   border-bottom: 1px solid var(--line);
-  font-size: 10px;
+  font-size: 11px;
   color: var(--quiet);
   flex-shrink: 0;
 }
@@ -825,7 +825,7 @@ kbd {
   flex: 1;
 }
 .metadata-note {
-  font-size: 10px;
+  font-size: 11px;
   padding: 8px 25px;
   color: var(--muted);
   background: var(--surface);
@@ -1074,7 +1074,7 @@ kbd {
   padding: 8px 20px;
   border-bottom: 1px solid var(--line);
   color: var(--quiet);
-  font-size: 10px;
+  font-size: 11px;
 }
 .code-editor {
   flex: 1;
@@ -1118,7 +1118,7 @@ kbd {
   background: var(--surface);
   border-bottom: 1px solid var(--line);
   color: var(--muted);
-  font-size: 10px;
+  font-size: 11px;
   flex-shrink: 0;
 }
 .code-format-toolbar > span {
@@ -1129,11 +1129,11 @@ kbd {
   background: none;
   color: var(--quiet);
   padding: 4px 6px;
-  font-size: 10px;
+  font-size: 11px;
 }
 .code-format-toolbar kbd {
   margin-left: 4px;
-  font-size: 9px;
+  font-size: 11px;
 }
 .settings-section > label input[type="checkbox"] {
   width: 16px;
@@ -1285,7 +1285,7 @@ kbd {
 }
 .outline-kind {
   flex-shrink: 0;
-  font-size: 9px;
+  font-size: 11px;
   color: var(--muted);
 }
 .outline-label {
@@ -1333,7 +1333,7 @@ kbd {
   display: flex;
   align-items: center;
   gap: 6px;
-  font-size: 9px;
+  font-size: 11px;
   letter-spacing: 1px;
   font-weight: 600;
   color: var(--quiet);
@@ -1341,7 +1341,7 @@ kbd {
   border-bottom: 2px solid var(--accent);
 }
 .terminal-header > select {
-  font-size: 10px;
+  font-size: 11px;
   border: 0;
   background: none;
   max-width: 130px;
@@ -1366,14 +1366,14 @@ kbd {
 .terminal-tabs button {
   border: 0;
   background: none;
-  font-size: 10px;
+  font-size: 11px;
   padding: 4px 6px;
   color: var(--quiet);
   white-space: nowrap;
 }
 .terminal-tabs button span {
   color: var(--muted);
-  font-size: 9px;
+  font-size: 11px;
 }
 .terminal-body {
   flex: 1;
@@ -1404,7 +1404,7 @@ kbd {
   color: var(--accent);
 }
 .status-bar {
-  height: 27px;
+  height: 30px;
   display: flex;
   align-items: center;
   gap: 20px;
@@ -1413,7 +1413,7 @@ kbd {
   border-top: 1px solid var(--line);
   flex-shrink: 0;
   color: var(--muted);
-  font-size: 9px;
+  font-size: 12px;
 }
 .status-left {
   display: flex;
@@ -1424,7 +1424,7 @@ kbd {
   padding: 2px 0;
   background: none;
   border: 0;
-  font-size: 9px;
+  font-size: 12px;
   color: var(--quiet);
 }
 .autosave-dot {
@@ -1465,7 +1465,7 @@ kbd {
   transform: rotate(5deg);
 }
 .welcome > .eyebrow {
-  font-size: 8px;
+  font-size: 11px;
   letter-spacing: 2px;
 }
 .welcome h1 {
@@ -1501,7 +1501,7 @@ kbd {
   gap: 22px;
   margin-top: 40px;
   color: var(--muted);
-  font-size: 10px;
+  font-size: 11px;
 }
 .welcome-shortcuts > span {
   display: flex;
@@ -1514,7 +1514,7 @@ kbd {
   margin-top: 30px;
 }
 .recent-list > .eyebrow {
-  font-size: 8px;
+  font-size: 11px;
   letter-spacing: 1px;
   display: block;
   padding: 0 3px 9px;
@@ -1533,7 +1533,7 @@ kbd {
   font-weight: 500;
 }
 .recent-list > button > span {
-  font-size: 9px;
+  font-size: 11px;
   color: var(--muted);
   white-space: nowrap;
   overflow: hidden;
@@ -1549,7 +1549,7 @@ kbd {
 }
 .tree-empty button {
   margin-top: 15px;
-  font-size: 10px;
+  font-size: 11px;
 }
 .toast {
   position: fixed;
@@ -1594,7 +1594,7 @@ kbd {
 }
 .conflict-banner button,
 .recovery-banner button {
-  font-size: 10px;
+  font-size: 11px;
   margin-left: auto;
   background: var(--bg);
   white-space: nowrap;
@@ -1653,7 +1653,7 @@ kbd {
 }
 .context-menu button span {
   margin-left: auto;
-  font-size: 9px;
+  font-size: 11px;
   color: var(--muted);
 }
 .context-menu button:focus-visible {
@@ -1710,7 +1710,7 @@ kbd {
   background: none;
 }
 .palette-caption {
-  font-size: 8px;
+  font-size: 11px;
   font-weight: 600;
   letter-spacing: 1px;
   color: var(--muted);
@@ -1737,7 +1737,7 @@ kbd {
   font-size: 12px;
 }
 .palette-results > button > span {
-  font-size: 10px;
+  font-size: 11px;
   color: var(--muted);
   margin-left: auto;
   max-width: 280px;
@@ -1758,7 +1758,7 @@ kbd {
   display: flex;
   gap: 16px;
   color: var(--muted);
-  font-size: 9px;
+  font-size: 11px;
   align-items: center;
   background: var(--surface);
 }
@@ -1766,12 +1766,12 @@ kbd {
   border: 0;
   padding: 0;
   background: none;
-  font-size: 9px;
+  font-size: 11px;
   color: var(--accent);
   margin-left: auto;
 }
 .settings-dialog {
-  width: 640px;
+  width: 800px;
   max-width: 100%;
   max-height: 90vh;
   border: 1px solid var(--line);
@@ -1790,7 +1790,7 @@ kbd {
   flex-shrink: 0;
 }
 .dialog-heading .eyebrow {
-  font-size: 8px;
+  font-size: 11px;
   letter-spacing: 1px;
 }
 .dialog-heading h2 {
@@ -1870,7 +1870,7 @@ kbd {
 }
 .settings-about span {
   color: var(--muted);
-  font-size: 10px;
+  font-size: 11px;
 }
 .dialog-scrim {
   z-index: 100;
@@ -1897,33 +1897,158 @@ kbd {
   max-height: calc(100vh - 48px);
   overflow: auto;
 }
-.pdf-preview { display: flex; flex: 1; flex-direction: column; min-height: 0; min-width: 0; overflow: hidden; }
-.pdf-toolbar, .pdf-find { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 8px 12px; border-bottom: 1px solid var(--line); color: var(--quiet); font-size: 12px; }
-.pdf-toolbar .icon-button svg, .pdf-find .icon-button svg { width: 15px; height: 15px; }
-.pdf-page-label { display: flex; align-items: center; gap: 6px; }
-.pdf-page-label input { width: 60px; padding: 4px 6px; font-size: 12px; }
-.pdf-zoom-controls { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
-.pdf-zoom-button, .pdf-scale { min-height: 32px; padding: 6px 10px; color: var(--text); background: var(--surface); white-space: nowrap; }
-.pdf-scale { min-width: 60px; text-align: center; font-variant-numeric: tabular-nums; font-weight: 600; }
-.pdf-toolbar-divider { width: 1px; align-self: stretch; background: var(--line); margin: 0 4px; }
-.pdf-find input { flex: 1; min-width: 100px; border: 0; padding: 4px; font-size: 12px; }
-.pdf-find > span { font-variant-numeric: tabular-nums; }
-.pdf-viewport-host { position: relative; flex: 1; min-height: 0; }
-.pdf-viewport { position: absolute; inset: 0; overflow: auto; background: #d7d9d6; }
-.pdf-viewport .pdfViewer { --viewer-container-height: 100%; padding: 12px 0; }
-.pdf-notice, .pdf-password { padding: 20px; font-size: 13px; line-height: 1.7; }
-.pdf-password { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
-.pdf-password p { flex-basis: 100%; margin: 0; }
-.pdf-password label { display: flex; gap: 8px; align-items: center; }
-.pdf-export-dialog > label { margin-bottom: 14px; }
-.pdf-export-dialog select { padding: 10px; font-size: 13px; width: 100%; }
-.pdf-export-dialog .pdf-checkbox { flex-direction: row; align-items: center; }
-.pdf-source, .pdf-destination span, .pdf-plan div { overflow-wrap: anywhere; }
-.pdf-destination { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-bottom: 16px; font-size: 12px; }
-.pdf-destination span { flex: 1; min-width: 160px; }
-.pdf-destination button { padding: 7px 10px; font-size: 11px; }
-.pdf-plan { padding: 14px; border: 1px solid var(--line); border-radius: 7px; font-size: 11px; line-height: 1.8; max-height: 220px; overflow: auto; }
-.pdf-plan strong { display: block; margin-bottom: 8px; }
+.pdf-preview {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+  overflow: hidden;
+}
+.pdf-toolbar,
+.pdf-find {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--line);
+  color: var(--quiet);
+  font-size: 12px;
+}
+.pdf-toolbar .icon-button svg,
+.pdf-find .icon-button svg {
+  width: 15px;
+  height: 15px;
+}
+.pdf-page-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.pdf-page-label input {
+  width: 60px;
+  padding: 4px 6px;
+  font-size: 12px;
+}
+.pdf-zoom-controls {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.pdf-zoom-button,
+.pdf-scale {
+  min-height: 32px;
+  padding: 6px 10px;
+  color: var(--text);
+  background: var(--surface);
+  white-space: nowrap;
+}
+.pdf-scale {
+  min-width: 60px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+}
+.pdf-toolbar-divider {
+  width: 1px;
+  align-self: stretch;
+  background: var(--line);
+  margin: 0 4px;
+}
+.pdf-find input {
+  flex: 1;
+  min-width: 100px;
+  border: 0;
+  padding: 4px;
+  font-size: 12px;
+}
+.pdf-find > span {
+  font-variant-numeric: tabular-nums;
+}
+.pdf-viewport-host {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+}
+.pdf-viewport {
+  position: absolute;
+  inset: 0;
+  overflow: auto;
+  background: #d7d9d6;
+}
+.pdf-viewport .pdfViewer {
+  --viewer-container-height: 100%;
+  padding: 12px 0;
+}
+.pdf-notice,
+.pdf-password {
+  padding: 20px;
+  font-size: 13px;
+  line-height: 1.7;
+}
+.pdf-password {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.pdf-password p {
+  flex-basis: 100%;
+  margin: 0;
+}
+.pdf-password label {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.pdf-export-dialog > label {
+  margin-bottom: 14px;
+}
+.pdf-export-dialog select {
+  padding: 10px;
+  font-size: 13px;
+  width: 100%;
+}
+.pdf-export-dialog .pdf-checkbox {
+  flex-direction: row;
+  align-items: center;
+}
+.pdf-source,
+.pdf-destination span,
+.pdf-plan div {
+  overflow-wrap: anywhere;
+}
+.pdf-destination {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 16px;
+  font-size: 12px;
+}
+.pdf-destination span {
+  flex: 1;
+  min-width: 160px;
+}
+.pdf-destination button {
+  padding: 7px 10px;
+  font-size: 11px;
+}
+.pdf-plan {
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  font-size: 11px;
+  line-height: 1.8;
+  max-height: 220px;
+  overflow: auto;
+}
+.pdf-plan strong {
+  display: block;
+  margin-bottom: 8px;
+}
 .action-dialog h2 {
   font-size: 20px;
   letter-spacing: -0.4px;
@@ -2054,8 +2179,9 @@ kbd {
   .document-content h1 {
     font-size: 31px;
   }
-  .save-state {
-    display: none;
+  .document-actions {
+    padding: 0 6px;
+    gap: 6px;
   }
   .outline {
     width: 170px;
@@ -2167,7 +2293,7 @@ kbd {
   overflow-wrap: anywhere;
 }
 .workspace-search-result > span {
-  font-size: 10px;
+  font-size: 11px;
   color: var(--muted);
 }
 .workspace-search-result code {
@@ -2524,7 +2650,7 @@ kbd {
   color: var(--accent);
 }
 .slash-caption {
-  font-size: 10px;
+  font-size: 11px;
   letter-spacing: 1px;
   padding: 8px 10px;
   color: var(--quiet);
@@ -2543,12 +2669,12 @@ kbd {
   align-items: center;
   flex-wrap: wrap;
   padding: 6px 10px;
-  font-size: 10px;
+  font-size: 11px;
   border-bottom: 1px solid var(--line);
 }
 .selection-actions button {
   padding: 4px 7px;
-  font-size: 10px;
+  font-size: 11px;
 }
 .split-pane-title {
   height: 29px;
@@ -2567,4 +2693,153 @@ kbd {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* Search scopes and document actions share the same visible, labelled controls. */
+[hidden] {
+  display: none !important;
+}
+.search-scopes {
+  display: flex;
+  gap: 6px;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--line);
+  background: var(--surface);
+}
+.search-scopes button {
+  flex: 1;
+  font-size: 13px;
+  padding: 9px 14px;
+}
+.search-scopes button[aria-pressed="true"],
+.settings-categories button[aria-pressed="true"] {
+  color: var(--accent);
+  background: var(--accent-bg);
+  border-color: var(--accent);
+  font-weight: 600;
+}
+.document-menu-button {
+  align-self: center;
+  margin: 0 6px;
+  padding: 6px 8px;
+  min-height: 30px;
+  background: var(--surface);
+  white-space: nowrap;
+}
+.save-status {
+  display: inline-flex;
+  min-width: 46px;
+}
+.settings-tools {
+  padding: 16px 24px 0;
+}
+.preferences-search {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 0 10px;
+  color: var(--quiet);
+}
+.preferences-search:focus-within {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.preferences-search input {
+  width: 100%;
+  min-width: 0;
+  border: 0;
+  outline: none;
+  padding: 10px 0;
+  font-size: 13px;
+}
+.preferences-search input:focus-visible {
+  outline: none;
+}
+.settings-tools p {
+  color: var(--quiet);
+  font-size: 12px;
+  line-height: 1.5;
+  margin: 10px 0;
+}
+.settings-categories {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 0 24px 14px;
+  border-bottom: 1px solid var(--line);
+}
+.settings-categories button {
+  min-height: 32px;
+  text-align: left;
+  font-size: 12px;
+}
+.settings-content {
+  min-height: 0;
+  scroll-behavior: auto;
+}
+.settings-section h3 {
+  font-size: 14px;
+}
+.settings-section > label,
+.settings-section > p {
+  font-size: 13px;
+}
+.settings-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-shrink: 0;
+  gap: 12px;
+  padding: 14px 24px;
+  border-top: 1px solid var(--line);
+  background: var(--surface);
+  border-radius: 0 0 13px 13px;
+}
+.settings-footer > span {
+  font-size: 12px;
+  color: var(--quiet);
+}
+.settings-empty {
+  padding: 20px 0;
+  line-height: 1.6;
+}
+.selection-actions {
+  background: var(--accent-bg);
+  font-size: 12px;
+}
+.selection-actions button {
+  font-size: 11px;
+  min-height: 28px;
+}
+@media (max-width: 1100px) {
+  .tabs-bar:has(.document-actions) {
+    height: auto;
+    flex-wrap: wrap;
+  }
+  .tabs-bar:has(.document-actions) .tabs-scroll {
+    flex-basis: calc(100% - 70px);
+    height: 43px;
+  }
+  .tabs-bar:has(.document-actions) .navigation-buttons {
+    height: 43px;
+  }
+  .document-actions {
+    flex: 1;
+    min-height: 39px;
+    border-left: 0;
+  }
+  .document-menu-button {
+    gap: 3px;
+    margin: 0 4px;
+    padding: 6px;
+  }
+  .document-menu-button > svg:first-child {
+    display: none;
+  }
+  .status-bar {
+    gap: 12px;
+    padding: 0 10px;
+  }
 }

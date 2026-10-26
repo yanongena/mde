@@ -243,6 +243,7 @@ async function startApplication() {
         error = e.message;
       }
     return {
+      defaults,
       settings: state.settings,
       recent: state.recent,
       workspace: opened,

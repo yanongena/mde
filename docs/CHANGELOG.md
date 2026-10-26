@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased — interface clarity
+
+- Increased secondary text contrast in both themes and raised small interface text; save status and the status bar use 12 px text.
+- Added explicit Files / Contents / Commands search scopes, query retention and multi-word command matching.
+- Grouped navigation and writing controls, moved secondary actions into a labelled Document menu and kept file tabs readable with two toolbar rows in compact windows.
+- Added searchable preference categories, immediate-change guidance and confirmed resets for one category, matching categories or all editable preferences.
+- Added explicit Explorer batch selection with keyboard support; ordinary file clicks no longer show Move/Trash actions.
+
 ## Unreleased — P3 quality of life
 
 - Added persistent visual reading font size, line height and text width, separate from source typography.
