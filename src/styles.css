@@ -19,6 +19,10 @@
   --accent: #357456;
   --accent-bg: #e7f0e7;
   --code: #f2f4ef;
+  --selection-bg: #b8d7fa;
+  --selection-inactive-bg: #d4e0ef;
+  --selection-text: #102a43;
+  --editor-active-line: #3574560a;
   --shadow: 0 24px 100px #1c34252b;
   color-scheme: light;
   font-synthesis: none;
@@ -37,6 +41,10 @@
   --accent: #9bc9a9;
   --accent-bg: #2b4033;
   --code: #19211f;
+  --selection-bg: #365e8d;
+  --selection-inactive-bg: #35485f;
+  --selection-text: #fff;
+  --editor-active-line: #9bc9a90d;
   --shadow: 0 24px 100px #0008;
   color: var(--text);
   background: var(--bg);
@@ -306,6 +314,7 @@ kbd {
   box-shadow: 0 0 0 3px #6fa47c0b;
 }
 .sidebar {
+  position: relative;
   background: var(--surface);
   flex-shrink: 0;
   display: flex;
@@ -390,6 +399,147 @@ kbd {
 }
 .tree-row.selected:not(.current) {
   background: var(--surface2);
+}
+.tree-row.drag-source {
+  opacity: 0.45;
+}
+.tree-row.drop-descendant {
+  box-shadow: inset 2px 0 var(--accent);
+  background: var(--accent-bg);
+}
+.tree-row.drop-target,
+.folder-heading.drop-target {
+  background: var(--accent-bg);
+  color: var(--accent);
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+.tree-row.drop-invalid,
+.folder-heading.drop-invalid {
+  outline: 2px dashed var(--muted);
+  outline-offset: -2px;
+}
+.file-tree.is-dragging .tree-row {
+  cursor: grabbing;
+}
+.file-tree[data-scroll-direction="up"] {
+  box-shadow: inset 0 14px 14px -14px var(--accent);
+}
+.file-tree[data-scroll-direction="down"] {
+  box-shadow: inset 0 -14px 14px -14px var(--accent);
+}
+.explorer-drop-status {
+  position: absolute;
+  left: 6px;
+  right: 6px;
+  bottom: 40px;
+  z-index: 3;
+  padding: 9px 12px;
+  border: 1px solid var(--accent);
+  border-radius: 5px;
+  background: var(--accent-bg);
+  color: var(--accent);
+  overflow-wrap: anywhere;
+  pointer-events: none;
+}
+.explorer-drop-status strong,
+.explorer-drop-status span {
+  display: block;
+  font-size: 11px;
+}
+.explorer-drop-status span {
+  margin-top: 4px;
+  color: var(--quiet);
+  font-size: 10px;
+}
+.explorer-drop-status.invalid {
+  color: var(--quiet);
+  border-color: var(--muted);
+  background: var(--surface2);
+}
+.markdown-link-drop-overlay,
+.markdown-link-drop-overlay * {
+  pointer-events: none;
+}
+.markdown-link-drop-word,
+.markdown-link-drop-caret,
+.markdown-link-drop-preview {
+  position: fixed;
+  z-index: 90;
+}
+.markdown-link-drop-word {
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  border-radius: 3px;
+  outline: 2px solid var(--accent);
+  box-shadow: 0 2px 0 var(--accent);
+}
+.markdown-link-drop-caret {
+  width: 2px;
+  background: var(--accent);
+}
+.markdown-link-drop-preview {
+  max-width: min(440px, calc(100vw - 16px));
+  padding: 8px 11px;
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--accent);
+  box-shadow: var(--shadow);
+  font-size: 12px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+.move-folder-search {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 12px 0 8px;
+}
+.move-folder-search input {
+  flex: 1;
+  min-width: 0;
+}
+.move-folder-list {
+  max-height: 220px;
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+}
+.move-folder-list button {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 8px;
+  width: 100%;
+  text-align: left;
+  border: 0;
+  border-radius: 0;
+  padding: 8px 10px;
+}
+.move-folder-list button span {
+  overflow-wrap: anywhere;
+  min-width: 0;
+}
+.move-folder-list button svg {
+  flex-shrink: 0;
+}
+.move-folder-list button[aria-pressed="true"] {
+  background: var(--accent-bg);
+  color: var(--accent);
+}
+.move-preview {
+  margin-top: 12px;
+  padding: 10px;
+  background: var(--surface2);
+  border-radius: 5px;
+  font-size: 12px;
+  max-height: 120px;
+  overflow: auto;
+  overflow-wrap: anywhere;
+}
+.move-preview strong,
+.move-preview span {
+  display: block;
 }
 .tree-row.current:before {
   content: "";
@@ -917,7 +1067,8 @@ kbd {
   pointer-events: none;
 }
 .document-content ::selection {
-  background: #9abf9f4a;
+  background: var(--selection-bg);
+  color: var(--selection-text);
 }
 .source-protection {
   padding: 8px 20px;
@@ -1011,9 +1162,18 @@ kbd {
   color: var(--muted) !important;
   border-right: 1px solid var(--line) !important;
 }
-.cm-activeLine,
+.cm-activeLine {
+  /* CodeMirror draws selections behind the line, so keep this translucent. */
+  background: var(--editor-active-line) !important;
+}
 .cm-activeLineGutter {
   background: var(--surface2) !important;
+}
+.code-editor .cm-selectionBackground {
+  background: var(--selection-inactive-bg) !important;
+}
+.code-editor .cm-focused .cm-selectionBackground {
+  background: var(--selection-bg) !important;
 }
 .cm-cursor {
   border-color: var(--accent) !important;
@@ -1726,6 +1886,11 @@ kbd {
 }
 .action-dialog.wide {
   width: 850px;
+}
+.action-dialog.move-dialog {
+  width: 600px;
+  max-height: calc(100vh - 48px);
+  overflow: auto;
 }
 .action-dialog h2 {
   font-size: 20px;

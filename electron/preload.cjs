@@ -14,6 +14,7 @@ contextBridge.exposeInMainWorld("margin", {
   readClipboardText: invoke("app:clipboard-text"),
   copyPath: invoke("file:copy-path"),
   reveal: invoke("file:reveal"),
+  openInBrowser: invoke("file:open-in-browser"),
   copyImage: invoke("image:copy"),
   imageBytes: invoke("image:bytes"),
   bootstrap: invoke("app:bootstrap"),

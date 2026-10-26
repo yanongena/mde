@@ -54,12 +54,16 @@ import { NavigationHistory, type NavigationEntry } from "./lib/navigation";
 import { WorkspaceSearch, emptySearch } from "./components/WorkspaceSearch";
 import { DocumentOutline } from "./components/DocumentOutline";
 import { selectionRoots } from "../electron/selection.mjs";
+import { isBrowserFile } from "../electron/browser-files.mjs";
 import { HistoryDialog } from "./components/HistoryDialog";
 import { ConflictDiff } from "./components/ConflictDiff";
+import { MoveDestinationPicker } from "./components/MoveDestinationPicker";
+import { useExplorerDrag } from "./components/useExplorerDrag";
+import { movePath, moveProblem } from "./lib/explorer-move";
 import { quickFiles, parseFileQuery, lineOffset } from "./lib/quick-open";
 import { ImagePreview } from "./components/ImagePreview";
 import { HtmlPreview } from "./components/HtmlPreview";
-import { documentMode, isHTML, supportsVisualMode } from "./lib/document-mode";
+import { documentMode, previewType, supportsVisualMode } from "./lib/document-mode";
 import { TerminalView } from "./components/TerminalPanel";
 import {
   basename,
@@ -94,6 +98,7 @@ type DialogSpec = {
   label?: string;
   choices: Choice[];
   extra?: React.ReactNode;
+  movePaths?: string[];
   resolve: (answer: string | null) => void;
 };
 const initialSettings: Settings = {
@@ -201,6 +206,14 @@ export default function App() {
   expandedRef.current = expanded;
   const [selected, setSelected] = useState(""),
     [treeFilter, setTreeFilter] = useState("");
+  const explorerDrag = useExplorerDrag({
+    entries,
+    expand: (directory) =>
+      setExpanded((previous) =>
+        previous.includes(directory) ? previous : [...previous, directory],
+      ),
+    move: (paths, directory) => void moveSelected(paths, directory),
+  });
   useEffect(() => {
     const existing = new Set(entries.map((entry) => entry.path));
     const next = selectionRef.current.filter((name) => existing.has(name));
@@ -247,7 +260,12 @@ export default function App() {
       setDialog({ ...spec, resolve });
     });
   const answer = (id: string | null) => {
-    const value = id === "submit" ? dialogInput.trim() : id;
+    const value =
+      id === "submit"
+        ? dialogInput.trim()
+        : id === "cancel" && dialog?.movePaths
+          ? null
+          : id;
     const current = dialog;
     setDialog(null);
     current?.resolve(value);
@@ -948,7 +966,7 @@ export default function App() {
     const tab = tabsRef.current.find((tab) => tab.path === activeRef.current);
     if (
       tab &&
-      isHTML(tab.path) &&
+      previewType(tab.path) &&
       tab.mode === "visual" &&
       !(await openFile(tab.path, undefined, {
         mode: "source",
@@ -1121,25 +1139,34 @@ export default function App() {
     const destination =
       directory ??
       (await ask({
-        title: `Move ${roots.length} selected items`,
+        title:
+          roots.length === 1
+            ? `Move ${basename(roots[0])}`
+            : `Move ${roots.length} selected items`,
         description:
-          "Choose an existing workspace-relative folder. All destinations are checked before moving; Markdown references are updated together.",
+          "Choose a destination folder. Markdown links and image references throughout the workspace are updated together.",
         input: "",
         label: "Destination folder (empty = workspace root)",
+        movePaths: roots,
         choices: [
           { id: "submit", label: "Move & update links", primary: true },
           { id: "cancel", label: "Cancel" },
         ],
       }));
-    if (
-      destination === null ||
-      destination === "cancel" ||
-      !(await settleEdits("Moving selected items"))
-    )
+    if (destination === null || !(await settleEdits("Moving selected items")))
       return;
     await withOperation(async () => {
       const result = await window.margin.moveSelection(roots, destination);
       remapWorkspacePaths(result.moves);
+      if (destination)
+        setExpanded((previous) => [
+          ...new Set([
+            ...previous,
+            ...destination
+              .split("/")
+              .map((_, index, parts) => parts.slice(0, index + 1).join("/")),
+          ]),
+        ]);
       setSelection(result.moves.map((move) => move.to));
       selectionRef.current = result.moves.map((move) => move.to);
       setSelected(result.moves[0]?.to || "");
@@ -1204,33 +1231,14 @@ export default function App() {
       fail(error);
     }
   }
-  function droppedSelection(event: React.DragEvent, directory: string) {
-    const raw = event.dataTransfer.getData("application/x-margin-paths");
-    if (raw) {
-      try {
-        const paths = JSON.parse(raw);
-        if (Array.isArray(paths) && paths.length > 1) {
-          void moveSelected(paths, directory);
-          return;
-        }
-      } catch {}
-    }
-    const from = event.dataTransfer.getData("application/x-margin-path");
-    if (from)
-      void moveEntry(
-        from,
-        directory ? directory + "/" + basename(from) : basename(from),
-      );
-  }
   function explorerMenu(
     path: string,
     x: number,
     y: number,
     target: HTMLElement,
   ) {
-    const parent = entries.find((entry) => entry.path === path)?.directory
-      ? path
-      : dirname(path);
+    const entry = entries.find((entry) => entry.path === path);
+    const parent = entry?.directory ? path : dirname(path);
     const selectedPaths = selectionRef.current.includes(path)
       ? selectionRef.current
       : [path];
@@ -1239,6 +1247,14 @@ export default function App() {
       y,
       restoreFocus: () => target.isConnected && target.focus(),
       items: [
+        ...(entry && !entry.directory && isBrowserFile(path)
+          ? [
+              {
+                label: "Open in browser",
+                run: () => window.margin.openInBrowser(path),
+              },
+            ]
+          : []),
         ...(path &&
         !entries.find((entry) => entry.path === path)?.directory &&
         activeRef.current &&
@@ -1261,6 +1277,7 @@ export default function App() {
           : []),
         ...(path && selectedPaths.length === 1
           ? [
+              { label: "Move to folder…", run: () => moveSelected([path]) },
               {
                 label: "Rename / move",
                 shortcut: "F2",
@@ -2118,7 +2135,7 @@ export default function App() {
     ...(current && supportsVisualMode(current.path)
       ? [
           {
-            name: `Toggle ${isHTML(current.path) ? "HTML" : "Markdown"} source / visual`,
+            name: `Toggle ${previewType(current.path) ?? "Markdown"} source / visual`,
             run: () => toggleMode(current),
           },
         ]
@@ -2189,6 +2206,8 @@ export default function App() {
   }
   function explorerKey(event: React.KeyboardEvent, entry?: Entry) {
     if ((event.target as HTMLElement).closest("button")) return;
+    // Continuing in the tree takes precedence over a file's delayed editor focus.
+    editorInteraction.current++;
     if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "a") {
       event.preventDefault();
       event.stopPropagation();
@@ -2507,7 +2526,20 @@ export default function App() {
                       <PanelLeftClose />
                     </button>
                   </div>
-                  <div className="folder-heading">
+                  <div
+                    className={
+                      "folder-heading " +
+                      (explorerDrag.destination?.directory === ""
+                        ? explorerDrag.destination.problem
+                          ? "drop-invalid"
+                          : "drop-target"
+                        : "")
+                    }
+                    data-explorer-drop="root"
+                    onDragOver={explorerDrag.over}
+                    onDrop={explorerDrag.drop}
+                    onDragLeave={explorerDrag.leave}
+                  >
                     <ChevronDown size={15} />
                     <strong data-tooltip={root}>
                       {root ? basename(root) : "No folder open"}
@@ -2548,7 +2580,7 @@ export default function App() {
                       </button>
                     )}
                   </label>
-                  {selection.length > 1 && (
+                  {selection.length > 0 && (
                     <div className="selection-actions">
                       <span>{selection.length} selected</span>
                       <button
@@ -2574,8 +2606,38 @@ export default function App() {
                       </button>
                     </div>
                   )}
+                  {explorerDrag.paths.length > 0 &&
+                    explorerDrag.destination && (
+                      <div
+                        className={
+                          "explorer-drop-status " +
+                          (explorerDrag.destination?.problem ? "invalid" : "")
+                        }
+                        role="status"
+                        aria-live="polite"
+                      >
+                        <strong>
+                          {explorerDrag.destination
+                            ? explorerDrag.destination.problem ||
+                              (explorerDrag.paths.length === 1
+                                ? `Move to ${movePath(explorerDrag.paths[0], explorerDrag.destination.directory)}`
+                                : `Move ${explorerDrag.paths.length} items into ${explorerDrag.destination.directory || "workspace root"}`)
+                            : "Drag to a folder or the workspace heading"}
+                        </strong>
+                        <span>
+                          Hold near an edge to scroll · Hover over a folder to
+                          open
+                        </span>
+                      </div>
+                    )}
                   <div
-                    className="file-tree"
+                    ref={explorerDrag.tree}
+                    className={
+                      "file-tree" +
+                      (explorerDrag.paths.length ? " is-dragging" : "")
+                    }
+                    data-explorer-drop="tree"
+                    data-scroll-direction={explorerDrag.scrolling || undefined}
                     role="tree"
                     aria-label="Workspace files"
                     aria-multiselectable="true"
@@ -2598,18 +2660,14 @@ export default function App() {
                         event.currentTarget,
                       );
                     }}
-                    onDragOver={(e) => {
-                      e.preventDefault();
-                      e.dataTransfer.dropEffect = "move";
-                    }}
-                    onDrop={(e) => {
-                      e.preventDefault();
-                      droppedSelection(e, "");
-                    }}
+                    onDragOver={explorerDrag.over}
+                    onDrop={explorerDrag.drop}
+                    onDragLeave={explorerDrag.leave}
                   >
                     {displayedEntries.map((entry) => (
                       <div
                         key={entry.path}
+                        data-explorer-path={entry.path}
                         role="treeitem"
                         aria-label={entry.path}
                         aria-selected={selection.includes(entry.path)}
@@ -2633,7 +2691,24 @@ export default function App() {
                         className={
                           "tree-row " +
                           (active === entry.path ? "current " : "") +
-                          (selection.includes(entry.path) ? "selected" : "")
+                          (selection.includes(entry.path) ? "selected " : "") +
+                          (explorerDrag.paths.includes(entry.path)
+                            ? "drag-source "
+                            : "") +
+                          (explorerDrag.destination?.directory === entry.path
+                            ? explorerDrag.destination.problem
+                              ? "drop-invalid "
+                              : "drop-target "
+                            : "") +
+                          (explorerDrag.destination &&
+                          !explorerDrag.destination.problem &&
+                          explorerDrag.destination.directory &&
+                          isInside(
+                            entry.path,
+                            explorerDrag.destination.directory,
+                          )
+                            ? "drop-descendant"
+                            : "")
                         }
                         style={{
                           paddingLeft:
@@ -2641,35 +2716,15 @@ export default function App() {
                         }}
                         draggable
                         onDragStart={(e) => {
-                          e.dataTransfer.setData(
-                            "application/x-margin-path",
-                            entry.path,
-                          );
+                          editorInteraction.current++;
                           const paths = selectionRef.current.includes(
                             entry.path,
                           )
                             ? selectionRef.current
                             : [entry.path];
-                          e.dataTransfer.setData(
-                            "application/x-margin-paths",
-                            JSON.stringify(paths),
-                          );
-                          e.dataTransfer.effectAllowed = "move";
+                          explorerDrag.begin(e, paths);
                         }}
-                        onDragOver={(e) => {
-                          if (entry.directory) {
-                            e.preventDefault();
-                            e.stopPropagation();
-                            e.dataTransfer.dropEffect = "move";
-                          }
-                        }}
-                        onDrop={(e) => {
-                          if (entry.directory) {
-                            e.preventDefault();
-                            e.stopPropagation();
-                            droppedSelection(e, entry.path);
-                          }
-                        }}
+                        onDragEnd={explorerDrag.end}
                         onClick={(event) => {
                           chooseSelection(
                             entry.path,
@@ -2999,7 +3054,7 @@ export default function App() {
                         if (current.mode !== "visual") void toggleMode(current);
                       }}
                     >
-                      {isHTML(current.path) ? (
+                      {previewType(current.path) ? (
                         <Eye size={13} />
                       ) : (
                         <PenLine size={13} />
@@ -3007,11 +3062,7 @@ export default function App() {
                       Visual
                     </button>
                     <button
-                      aria-label={
-                        isHTML(current.path)
-                          ? "HTML source mode"
-                          : "Markdown source mode"
-                      }
+                      aria-label={`${previewType(current.path) ?? "Markdown"} source mode`}
                       className={current.mode === "source" ? "active" : ""}
                       onClick={() => {
                         if (current.mode !== "source") void toggleMode(current);
@@ -3162,7 +3213,7 @@ export default function App() {
                 )}
                 {isImage(tab.path) ? (
                   <ImagePreview path={tab.path} />
-                ) : isHTML(tab.path) && tab.mode === "visual" ? (
+                ) : previewType(tab.path) && tab.mode === "visual" ? (
                   <HtmlPreview
                     path={tab.path}
                     text={tab.text}
@@ -3286,8 +3337,8 @@ export default function App() {
                 onNavigate={(item) => {
                   void openFile(current.path, undefined, {
                     range: { from: item.from, to: item.from },
-                    mode: isHTML(current.path) ? "source" : current.mode,
-                    preserveText: isHTML(current.path),
+                    mode: previewType(current.path) ? "source" : current.mode,
+                    preserveText: previewType(current.path) !== null,
                   });
                 }}
               />
@@ -4035,13 +4086,21 @@ export default function App() {
       {dialog && (
         <div className="modal-scrim dialog-scrim">
           <form
-            className={"action-dialog " + (dialog.extra ? "wide" : "")}
+            className={
+              "action-dialog " +
+              (dialog.extra ? "wide" : dialog.movePaths ? "move-dialog" : "")
+            }
             role="dialog"
             aria-modal="true"
             aria-label={dialog.title}
             onSubmit={(e) => {
               e.preventDefault();
-              if (dialog.input !== undefined && dialogInput.trim())
+              if (
+                dialog.input !== undefined &&
+                (dialog.movePaths
+                  ? !moveProblem(dialog.movePaths, dialogInput.trim(), entries)
+                  : dialogInput.trim())
+              )
                 answer("submit");
             }}
           >
@@ -4060,6 +4119,14 @@ export default function App() {
               </label>
             )}
             {dialog.extra}
+            {dialog.movePaths && (
+              <MoveDestinationPicker
+                entries={entries}
+                paths={dialog.movePaths}
+                directory={dialogInput.trim()}
+                onChange={setDialogInput}
+              />
+            )}
             <div className="dialog-actions">
               {dialog.choices.map((choice, index) => (
                 <button
@@ -4069,7 +4136,16 @@ export default function App() {
                     choice.primary ? "primary" : choice.danger ? "danger" : ""
                   }
                   type={choice.id === "submit" ? "submit" : "button"}
-                  disabled={choice.id === "submit" && !dialogInput.trim()}
+                  disabled={
+                    choice.id === "submit" &&
+                    (dialog.movePaths
+                      ? !!moveProblem(
+                          dialog.movePaths,
+                          dialogInput.trim(),
+                          entries,
+                        )
+                      : !dialogInput.trim())
+                  }
                   onClick={() => {
                     if (choice.id !== "submit") answer(choice.id);
                   }}

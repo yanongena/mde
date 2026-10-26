@@ -296,6 +296,11 @@ export class Workspace {
     return this.mutate(async () => {
       const roots = selectionRoots(paths);
       const parent = await this.resolve(directory);
+      directory = slash(directory);
+      if (directory.split("/").some((part) => this.ignored.includes(part)))
+        throw new Error(
+          "Choose a destination outside the ignored directories so references remain managed.",
+        );
       if (!(await fs.stat(parent)).isDirectory())
         throw new Error("Choose an existing destination folder.");
       const moves = [];

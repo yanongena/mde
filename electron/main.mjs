@@ -25,6 +25,7 @@ import { FileHistory } from "./history.mjs";
 import { selectionRoots } from "./selection.mjs";
 import { savedPosition } from "./session.mjs";
 import { createSpellcheck } from "./spellcheck.mjs";
+import { openInBrowser } from "./browser.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 if (process.env.MARGIN_DATA_PATH)
@@ -302,6 +303,9 @@ async function startApplication() {
   );
   handle("file:reveal", async (name) =>
     shell.showItemInFolder(await requireWorkspace().resolve(name)),
+  );
+  handle("file:open-in-browser", (name) =>
+    openInBrowser(requireWorkspace(), name, app),
   );
   handle("image:bytes", async (source) => {
     if (typeof source !== "string") throw new Error("Invalid image address.");

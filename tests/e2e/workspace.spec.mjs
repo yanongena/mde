@@ -216,6 +216,75 @@ test("HTML visual mode survives external reloads and a restart while HTM default
   expect(errors).toEqual([]);
 });
 
+test("SVG visual mode renders unsaved XML, preserves source and supports source search", async () => {
+  await page.getByRole("button", { name: "Preferences", exact: true }).click();
+  await page.getByLabel("Automatically format code on open", { exact: true }).uncheck();
+  await page.getByRole("button", { name: "Close preferences" }).click();
+  const original = '<?xml version="1.0" encoding="UTF-8"?>\r\n<svg xmlns="http://www.w3.org/2000/svg" width="200" height="160" viewBox="0 0 200 160">\r\n  <defs><linearGradient id="gradient"><stop stop-color="gold"/><stop offset="1" stop-color="orange"/></linearGradient></defs>\r\n  <rect width="200" height="160" fill="url(#gradient)"/>\r\n  <text x="12" y="80">Original drawing</text>\r\n  <script>parent.document.body.dataset.svgScript = "executed"</script>\r\n</svg>\r\n';
+  await fs.writeFile(file("src/drawing.SVG"), original);
+  await open("src/drawing.SVG");
+  await expect(page.getByRole("button", { name: "SVG source mode" })).toHaveClass("active");
+  const updated = original.replace("Original drawing", "Unsaved drawing");
+  await sourceFill(updated);
+  await page.getByRole("button", { name: "Visual mode", exact: true }).click();
+  const preview = page.frameLocator('iframe[title="SVG preview for src/drawing.SVG"]');
+  await expect(preview.locator("svg")).toBeVisible();
+  await expect(preview.locator("text")).toHaveText("Unsaved drawing");
+  await expect(preview.locator("linearGradient")).toHaveCount(1);
+  expect(await preview.locator("svg").evaluate((svg) => svg.namespaceURI)).toBe("http://www.w3.org/2000/svg");
+  expect(await page.locator("body").getAttribute("data-svg-script")).toBeNull();
+  expect(await disk("src/drawing.SVG")).toBe(original);
+  await page.screenshot({ path: "test-results/svg-preview.png" });
+  await page.getByRole("button", { name: "SVG source mode" }).click();
+  expect((await page.locator(".editor-pane.active .cm-line").allTextContents()).join("\n")).toBe(updated.replace(/\r\n/g, "\n"));
+  await page.getByRole("button", { name: "Visual mode", exact: true }).click();
+  await preview.locator("svg").click();
+  await page.keyboard.press(shortcut + "+f");
+  await expect(page.getByRole("button", { name: "SVG source mode" })).toHaveClass("active");
+  await expect(page.locator(".editor-pane.active .cm-search")).toBeVisible();
+  await page.keyboard.press("Escape");
+  await page.getByRole("button", { name: "Visual mode", exact: true }).click();
+  await preview.locator("svg").click();
+  await page.keyboard.press(shortcut + "+s");
+  await expect.poll(() => disk("src/drawing.SVG")).toBe(updated);
+  expect(errors).toEqual([]);
+});
+
+test("SVG visual mode survives external updates and restart and retains malformed source", async () => {
+  await page.getByRole("button", { name: "Preferences", exact: true }).click();
+  await page.getByLabel("Automatically format code on open", { exact: true }).uncheck();
+  await page.getByRole("button", { name: "Close preferences" }).click();
+  const original = '<svg xmlns="http://www.w3.org/2000/svg" width="120" height="120"><circle cx="60" cy="60" r="50" fill="red"/></svg>\n';
+  await fs.writeFile(file("src/drawing.svg"), original);
+  await open("src/drawing.svg");
+  await page.getByRole("button", { name: "Visual mode", exact: true }).click();
+  const preview = () => page.frameLocator('iframe[title="SVG preview for src/drawing.svg"]');
+  await expect(preview().locator("circle")).toHaveCSS("fill", "rgb(255, 0, 0)");
+  const updated = original.replace('fill="red"', 'fill="blue"');
+  await fs.writeFile(file("src/drawing.svg"), updated);
+  await expect(preview().locator("circle")).toHaveCSS("fill", "rgb(0, 0, 255)");
+  await expect.poll(async () => {
+    const state = JSON.parse(await fs.readFile(path.join(data, "state.json"), "utf8"));
+    return state.sessions[root]?.tabs.find((tab) => tab.path === "src/drawing.svg")?.mode;
+  }).toBe("visual");
+  await app.evaluate(({ app }) => app.exit());
+  await app.close().catch(() => {});
+  await launch();
+  await expect(preview().locator("circle")).toHaveCSS("fill", "rgb(0, 0, 255)");
+  await page.getByRole("button", { name: "SVG source mode" }).click();
+  const invalid = '<svg xmlns="http://www.w3.org/2000/svg"><rect></svg>';
+  await sourceFill(invalid);
+  await page.getByRole("button", { name: "Visual mode", exact: true }).click();
+  await expect(preview().getByRole("alert")).toContainText("Correct the SVG markup in Source");
+  await page.getByRole("button", { name: "SVG source mode" }).click();
+  expect(await page.locator(".editor-pane.active .cm-content").innerText()).toBe(invalid);
+  await sourceFill(updated);
+  await page.getByRole("button", { name: "Visual mode", exact: true }).click();
+  await expect(preview().locator("circle")).toHaveCSS("fill", "rgb(0, 0, 255)");
+  expect(await disk("src/drawing.svg")).toBe(updated);
+  expect(errors).toEqual([]);
+});
+
 test("visual authoring, tables, formatting, undo, source mode and repeated serialization", async () => {
   await page
     .locator(".sidebar")
@@ -2026,6 +2095,44 @@ test("P2 menus preview and copy HTTPS images without creating local attachments"
   expect(errors).toEqual([]);
 });
 
+test("explorer offers Open in browser for supported files and reports browser launch errors", async () => {
+  await fs.writeFile(file("assets/browser image.PNG"), Buffer.from([0, 1, 2]));
+  await fs.writeFile(file("report.pdf"), "%PDF-1.4");
+  await fs.mkdir(file("folder.html"));
+  await app.evaluate(({ app }) => {
+    globalThis.browserProtocols = [];
+    app.getApplicationInfoForProtocol = async (url) => {
+      globalThis.browserProtocols.push(url);
+      throw new Error("Browser unavailable for test");
+    };
+  });
+  for (const name of ["src/example.html", "assets/browser image.PNG", "report.pdf"]) {
+    const item = page.getByRole("treeitem", { name, exact: true });
+    await expect(item).toBeVisible();
+    await item.click({ button: "right" });
+    await menuAction("Open in browser");
+    await expect(page.getByRole("alert")).toContainText("Browser unavailable for test");
+    await page.getByRole("button", { name: "Dismiss menu error" }).click();
+  }
+  expect(await app.evaluate(() => globalThis.browserProtocols)).toEqual(["https://", "https://", "https://"]);
+  for (const name of ["notes/welcome.md", "src/example.py", "assets", "folder.html"]) {
+    await page.getByRole("treeitem", { name, exact: true }).click({ button: "right" });
+    await expect(page.getByRole("menuitem", { name: "Open in browser", exact: true })).toHaveCount(0);
+    await page.keyboard.press("Escape");
+  }
+  const refused = await page.evaluate(async () => {
+    const result = [];
+    for (const name of ["../escape.html", "folder.html", "src/example.py"]) {
+      try { await window.margin.openInBrowser(name); result.push(false); }
+      catch { result.push(true); }
+    }
+    return result;
+  });
+  expect(refused).toEqual([true, true, true]);
+  expect(await app.evaluate(() => globalThis.browserProtocols)).toHaveLength(3);
+  expect(errors).toEqual([]);
+});
+
 test("P2 menus create in clicked folders and empty explorer space, copy paths and reveal safely", async () => {
   await captureReveals();
   await page
@@ -3566,6 +3673,312 @@ test("P3 QoL multi-selection cancels safely and batch moves preserve links betwe
     "data-tooltip",
     "archive/welcome.md",
   );
+  expect(errors).toEqual([]);
+});
+
+test("explorer drags whole folders into folders and back to the workspace heading while updating links and tabs", async () => {
+  await fs.writeFile(file("notes/other.md"), "[Welcome](welcome.md#small-beginnings) [Index](../index.md)\n");
+  await open("notes/other.md");
+  await page.getByRole("treeitem", { name: "notes", exact: true })
+    .dragTo(page.getByRole("treeitem", { name: "archive", exact: true }));
+  await expect(page.getByRole("treeitem", { name: "archive/notes/other.md", exact: true })).toBeVisible();
+  await expect.poll(() => disk("index.md")).toBe("[Welcome](archive/notes/welcome.md)\n");
+  expect(await disk("archive/notes/other.md")).toBe("[Welcome](welcome.md#small-beginnings) [Index](../../index.md)\n");
+  await expect(page.locator(".editor-tab.active")).toHaveAttribute("data-tooltip", "archive/notes/other.md");
+  await page.getByRole("treeitem", { name: "archive/notes", exact: true }).dragTo(page.locator(".folder-heading"));
+  await expect(page.getByRole("treeitem", { name: "notes/other.md", exact: true })).toBeVisible();
+  expect(await disk("index.md")).toBe("[Welcome](notes/welcome.md)\n");
+  expect(await disk("notes/other.md")).toBe("[Welcome](welcome.md#small-beginnings) [Index](../index.md)\n");
+  await expect(page.locator(".editor-tab.active")).toHaveAttribute("data-tooltip", "notes/other.md");
+  expect(errors).toEqual([]);
+});
+
+test("explorer move picker searches nested destinations, previews full paths and supports the workspace root", async () => {
+  await fs.mkdir(file("archive/deep"));
+  const notes = page.getByRole("treeitem", { name: "notes", exact: true });
+  await notes.click({ button: "right" });
+  await page.getByRole("menuitem", { name: "Move to folder…", exact: true }).click();
+  const dialog = page.getByRole("dialog", { name: "Move notes", exact: true });
+  await dialog.getByLabel("Find destination folder", { exact: true }).fill("deep");
+  await dialog.getByRole("button", { name: "archive/deep", exact: true }).click();
+  await expect(dialog.getByRole("status")).toContainText("archive/deep/notes");
+  await test.info().attach("move-folder-picker", { body: await page.screenshot(), contentType: "image/png" });
+  await expect(dialog.getByRole("button", { name: "notes", exact: true })).toHaveCount(0);
+  await dialog.getByRole("button", { name: "Move & update links", exact: true }).click();
+  const moved = page.getByRole("treeitem", { name: "archive/deep/notes", exact: true });
+  await expect(moved).toBeVisible();
+  expect(await disk("index.md")).toContain("archive/deep/notes/welcome.md");
+  await moved.click({ button: "right" });
+  await page.getByRole("menuitem", { name: "Move to folder…", exact: true }).click();
+  await dialog.getByRole("button", { name: "Workspace root", exact: true }).click();
+  await expect(dialog.getByRole("button", { name: "Move & update links", exact: true })).toBeEnabled();
+  await expect(dialog.getByRole("status")).toContainText("notes");
+  await dialog.getByRole("button", { name: "Move & update links", exact: true }).click();
+  await expect(notes).toBeVisible();
+  expect(await disk("index.md")).toBe("[Welcome](notes/welcome.md)\n");
+  expect(errors).toEqual([]);
+});
+
+// Controlled drag events let us hold the pointer still while testing hover timers
+// and edge scrolling; the folder test above also exercises native mouse dragging.
+async function explorerDragStart(name) {
+  const transfer = await page.evaluateHandle(() => new DataTransfer());
+  await page.getByRole("treeitem", { name, exact: true }).dispatchEvent("dragstart", { dataTransfer: transfer });
+  return transfer;
+}
+async function explorerDragOver(locator, transfer, position) {
+  const rect = await locator.boundingBox();
+  const coordinates = { clientX: rect.x + (position?.x ?? rect.width / 2), clientY: rect.y + (position?.y ?? rect.height / 2) };
+  await locator.dispatchEvent("dragover", { dataTransfer: transfer, ...coordinates });
+  return coordinates;
+}
+
+async function finishMarkdownDrop(target, transfer, point) {
+  await target.dispatchEvent("drop", { dataTransfer: transfer, ...point });
+  await page.evaluate(() => document.dispatchEvent(new DragEvent("dragend", { bubbles: true })));
+}
+
+test("dropping Markdown on a visual word previews and links that word without moving the file", async () => {
+  const original = "# Drop\n\nHello **target** world.\n";
+  await fs.writeFile(file("notes/welcome.md"), original);
+  await open("notes/welcome.md");
+  const editor = page.locator(".editor-pane.active .document-content"), word = editor.locator("strong");
+  await expect(word).toHaveText("target");
+  const transfer = await explorerDragStart("notes/other.md");
+  const point = await explorerDragOver(word, transfer);
+  await expect(page.locator(".markdown-link-drop-word")).toBeVisible();
+  await expect(page.locator(".markdown-link-drop-preview")).toHaveText("Link “target” → notes/other.md");
+  await expect(editor.locator("a")).toHaveCount(0);
+  await expect(page.locator(".save-state")).toContainText("Saved");
+  expect(await disk("notes/welcome.md")).toBe(original);
+  await test.info().attach("word-link-drop", { body: await page.screenshot(), contentType: "image/png" });
+  await finishMarkdownDrop(word, transfer, point);
+  await expect(editor.getByRole("link", { name: "target", exact: true })).toHaveAttribute("href", "other.md");
+  await expect(editor.getByRole("link", { name: "target", exact: true }).locator("strong")).toHaveText("target");
+  await expect(page.locator(".markdown-link-drop-overlay")).toHaveCount(0);
+  await editor.press(shortcut + "+z");
+  await expect(editor.locator("a")).toHaveCount(0);
+  await expect(word).toHaveText("target");
+  await editor.press(shortcut + "+y");
+  await expect(editor.getByRole("link", { name: "target", exact: true })).toBeVisible();
+  await save();
+  expect(await disk("notes/welcome.md")).toMatch(/\[(?:\*\*)?target(?:\*\*)?\]\(other\.md\)/);
+  expect(await disk("notes/other.md")).toContain("# Other");
+  expect(errors).toEqual([]);
+});
+
+test("dropping Markdown on an empty visual paragraph uses the encoded filename", async () => {
+  const name = "notes/Café [draft] #1.md";
+  await fs.writeFile(file(name), "# Draft\n");
+  await fs.writeFile(file("notes/welcome.md"), "");
+  await open("notes/welcome.md");
+  const editor = page.locator(".editor-pane.active .document-content");
+  const paragraph = editor.locator("p").last();
+  await expect(paragraph).toHaveText("");
+  const transfer = await explorerDragStart(name);
+  const point = await explorerDragOver(paragraph, transfer, { x: 8, y: 12 });
+  await expect(page.locator(".markdown-link-drop-preview")).toHaveText(`Link “Café [draft] #1.md” → ${name}`);
+  await expect(page.locator(".markdown-link-drop-caret")).toBeVisible();
+  await finishMarkdownDrop(paragraph, transfer, point);
+  const link = editor.getByRole("link", { name: "Café [draft] #1.md", exact: true });
+  await expect(link).toHaveAttribute("href", "Caf%C3%A9%20%5Bdraft%5D%20%231.md");
+  await save();
+  expect(await disk(name)).toBe("# Draft\n");
+  expect(errors).toEqual([]);
+});
+
+test("native Markdown dragging into a visual document creates a link", async () => {
+  await fs.writeFile(file("notes/welcome.md"), "# Drop\n\n**Existing** text.\n");
+  await open("notes/welcome.md");
+  const editor = page.locator(".editor-pane.active .document-content");
+  await page.getByRole("treeitem", { name: "notes/other.md", exact: true }).dragTo(editor.locator("strong"));
+  await expect(editor.getByRole("link", { name: "Existing", exact: true })).toHaveAttribute("href", "other.md");
+  await expect(page.locator(".drag-source, .markdown-link-drop-overlay")).toHaveCount(0);
+  await save();
+  expect(await disk("notes/other.md")).toContain("# Other");
+  expect(errors).toEqual([]);
+});
+
+test("dropping Markdown in blank visual space inserts its filename without joining neighboring text", async () => {
+  await fs.writeFile(file("notes/welcome.md"), "# Drop\n\nParagraph.\n");
+  await open("notes/welcome.md");
+  const editor = page.locator(".editor-pane.active .document-content");
+  const transfer = await explorerDragStart("notes/other.md");
+  const point = await explorerDragOver(editor, transfer, { x: 70, y: 260 });
+  await expect(page.locator(".markdown-link-drop-preview")).toHaveText("Link “other.md” → notes/other.md");
+  await expect(page.locator(".markdown-link-drop-caret")).toBeVisible();
+  await finishMarkdownDrop(editor, transfer, point);
+  await expect(editor.getByRole("link", { name: "other.md", exact: true })).toHaveAttribute("href", "other.md");
+  await expect(editor.locator("p").first()).toHaveText("Paragraph. other.md");
+  await editor.press(shortcut + "+z");
+  await expect(editor.locator("p").first()).toHaveText("Paragraph.");
+  expect(errors).toEqual([]);
+});
+
+test("Markdown source drop previews a word and inserts a link as one undo step while preserving CRLF", async () => {
+  const original = "# Source\r\n\r\nHello target world.\r\n\r\n";
+  await fs.writeFile(file("notes/welcome.md"), original);
+  await open("notes/welcome.md");
+  await page.getByRole("button", { name: "Markdown source mode", exact: true }).click();
+  const editor = page.locator(".editor-pane.active .cm-content"), line = editor.locator(".cm-line").filter({ hasText: "Hello target world." });
+  const point = await line.evaluate((element) => {
+    const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
+    let node;
+    while ((node = walker.nextNode())) {
+      const offset = node.textContent.indexOf("target");
+      if (offset < 0) continue;
+      const range = document.createRange(); range.setStart(node, offset); range.setEnd(node, offset + 6);
+      const rect = range.getBoundingClientRect();
+      return { clientX: rect.x + rect.width / 2, clientY: rect.y + rect.height / 2 };
+    }
+  });
+  const transfer = await explorerDragStart("notes/other.md");
+  await line.dispatchEvent("dragover", { dataTransfer: transfer, ...point });
+  await expect(page.locator(".markdown-link-drop-preview")).toHaveText("Link “target” → notes/other.md");
+  await expect(page.locator(".markdown-link-drop-word")).toBeVisible();
+  await finishMarkdownDrop(line, transfer, point);
+  await expect(editor).toContainText("Hello [target](other.md) world.");
+  await editor.press(shortcut + "+z");
+  await expect(editor).toContainText("Hello target world.");
+  await expect(editor).not.toContainText("[target]");
+  await editor.press(shortcut + "+y");
+  await save();
+  expect(await disk("notes/welcome.md")).toBe(original.replace("target", "[target](other.md)"));
+  expect(await disk("notes/other.md")).toContain("# Other");
+  expect(errors).toEqual([]);
+});
+
+test("Markdown source drops on a blank line use the literal filename as link text", async () => {
+  const portable = "archive/[Draft] notes.md";
+  await fs.writeFile(file(portable), "# Draft\n");
+  await fs.writeFile(file("notes/welcome.md"), "# Source\n\n");
+  await open("notes/welcome.md");
+  await page.getByRole("button", { name: "Markdown source mode", exact: true }).click();
+  const editor = page.locator(".editor-pane.active .cm-content"), blank = editor.locator(".cm-line").last();
+  const transfer = await explorerDragStart(portable);
+  const point = await explorerDragOver(blank, transfer, { x: 6, y: 8 });
+  await expect(page.locator(".markdown-link-drop-preview")).toHaveText("Link “[Draft] notes.md” → archive/[Draft] notes.md");
+  await expect(page.locator(".markdown-link-drop-caret")).toBeVisible();
+  await finishMarkdownDrop(blank, transfer, point);
+  await expect(editor).toContainText("[\\[Draft\\] notes.md](../archive/%5BDraft%5D%20notes.md)");
+  await save();
+  expect(await disk("notes/welcome.md")).toBe("# Source\n\n[\\[Draft\\] notes.md](../archive/%5BDraft%5D%20notes.md)");
+  expect(errors).toEqual([]);
+});
+
+test("cancelling a Markdown link drop clears its preview without edits and folders do not become links", async () => {
+  await open("notes/welcome.md");
+  const editor = page.locator(".editor-pane.active .document-content"), word = editor.locator("strong").first();
+  const original = await disk("notes/welcome.md");
+  const transfer = await explorerDragStart("notes/other.md");
+  await explorerDragOver(word, transfer);
+  await expect(page.locator(".markdown-link-drop-preview")).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(page.locator(".markdown-link-drop-overlay")).toHaveCount(0);
+  await expect(page.locator(".save-state")).toContainText("Saved");
+  const folder = await explorerDragStart("notes");
+  await explorerDragOver(word, folder);
+  await expect(page.locator(".markdown-link-drop-overlay")).toHaveCount(0);
+  await page.keyboard.press("Escape");
+  expect(await disk("notes/welcome.md")).toBe(original);
+  expect(errors).toEqual([]);
+});
+
+test("explorer highlights destinations, opens hovered folders, rejects self moves and clears on cancel", async () => {
+  await fs.mkdir(file("archive/nested"));
+  const archive = page.getByRole("treeitem", { name: "archive", exact: true });
+  if (await archive.getAttribute("aria-expanded") === "true") await archive.click();
+  const transfer = await explorerDragStart("notes");
+  const point = await explorerDragOver(archive, transfer);
+  await expect(archive).toHaveClass(/drop-target/);
+  await expect(page.locator(".explorer-drop-status")).toContainText("Move to archive/notes");
+  await expect(page.getByRole("tooltip")).toHaveCount(0);
+  await expect(archive).toHaveAttribute("aria-expanded", "true");
+  await expect(page.getByRole("treeitem", { name: "archive/nested", exact: true })).toBeVisible();
+  await test.info().attach("folder-destination", { body: await page.screenshot(), contentType: "image/png" });
+  await archive.dispatchEvent("drop", { dataTransfer: transfer, ...point });
+  const moved = page.getByRole("treeitem", { name: "archive/notes", exact: true });
+  await expect(moved).toBeVisible();
+  const self = await explorerDragStart("archive/notes");
+  const selfPoint = await explorerDragOver(page.getByRole("treeitem", { name: "archive/notes/other.md", exact: true }), self);
+  await expect(moved).toHaveClass(/drop-invalid/);
+  await expect(page.locator(".explorer-drop-status")).toContainText("cannot be moved into itself");
+  await moved.dispatchEvent("drop", { dataTransfer: self, ...selfPoint });
+  await expect(moved).toBeVisible();
+  expect(await disk("index.md")).toContain("archive/notes/welcome.md");
+  await explorerDragStart("archive/notes");
+  await explorerDragOver(archive, self);
+  await page.keyboard.press("Escape");
+  await expect(page.locator(".explorer-drop-status")).toHaveCount(0);
+  await expect(page.locator(".drop-target, .drop-invalid, .drag-source")).toHaveCount(0);
+  expect(errors).toEqual([]);
+});
+
+test("explorer scrolls long lists with a stationary drag pointer in both directions and stops outside the tree", async () => {
+  await Promise.all(Array.from({ length: 90 }, (_, i) => fs.writeFile(file(`notes/item-${String(i).padStart(3, "0")}.md`), "# Item\n")));
+  await expect(page.getByRole("treeitem", { name: "notes/item-089.md", exact: true })).toHaveCount(1);
+  const tree = page.getByRole("tree", { name: "Workspace files", exact: true });
+  await tree.evaluate((element) => { element.scrollTop = 0; });
+  const transfer = await explorerDragStart("notes");
+  const rect = await tree.boundingBox();
+  await explorerDragOver(tree, transfer, { x: 60, y: rect.height - 5 });
+  await expect.poll(() => tree.evaluate((element) => element.scrollTop)).toBeGreaterThan(400);
+  await explorerDragOver(tree, transfer, { x: 60, y: rect.height / 2 });
+  const stopped = await tree.evaluate((element) => element.scrollTop);
+  await explorerDragOver(tree, transfer, { x: 60, y: 5 });
+  await expect.poll(() => tree.evaluate((element) => element.scrollTop)).toBeLessThan(stopped - 200);
+  await tree.dispatchEvent("dragleave", { relatedTarget: null });
+  const outside = await tree.evaluate((element) => element.scrollTop);
+  await expect(page.locator(".explorer-drop-status")).toHaveCount(0);
+  await page.waitForTimeout(150);
+  expect(await tree.evaluate((element) => element.scrollTop)).toBe(outside);
+  await page.keyboard.press("Escape");
+  await expect(tree).not.toHaveClass(/is-dragging/);
+  expect(errors).toEqual([]);
+});
+
+test("explorer blocks colliding drops and targets a file's containing folder", async () => {
+  await fs.writeFile(file("archive/other.md"), "# Existing\n");
+  await expect(page.getByRole("treeitem", { name: "archive/other.md", exact: true })).toBeVisible();
+  const archive = page.getByRole("treeitem", { name: "archive", exact: true });
+  const transfer = await explorerDragStart("notes/other.md");
+  const collision = await explorerDragOver(archive, transfer);
+  await expect(archive).toHaveClass(/drop-invalid/);
+  await expect(page.locator(".explorer-drop-status")).toContainText("already exists");
+  await archive.dispatchEvent("drop", { dataTransfer: transfer, ...collision });
+  expect(await disk("archive/other.md")).toBe("# Existing\n");
+  expect(await disk("notes/other.md")).toContain("welcome.md");
+  const index = await explorerDragStart("index.md");
+  const target = page.getByRole("treeitem", { name: "notes/other.md", exact: true });
+  const point = await explorerDragOver(target, index);
+  await expect(page.getByRole("treeitem", { name: "notes", exact: true })).toHaveClass(/drop-target/);
+  await expect(page.locator(".explorer-drop-status")).toContainText("Move to notes/index.md");
+  await target.dispatchEvent("drop", { dataTransfer: index, ...point });
+  await expect(page.getByRole("treeitem", { name: "notes/index.md", exact: true })).toBeVisible();
+  expect(await disk("notes/index.md")).toBe("[Welcome](welcome.md)\n");
+  await fs.mkdir(file("cancel"));
+  await expect(page.getByRole("treeitem", { name: "cancel", exact: true })).toBeVisible();
+  await page.getByRole("treeitem", { name: "notes/index.md", exact: true }).click({ button: "right" });
+  await page.getByRole("menuitem", { name: "Move to folder…", exact: true }).click();
+  await page.getByRole("group", { name: "Destination folders", exact: true })
+    .getByRole("button", { name: "cancel", exact: true }).click();
+  await page.getByRole("button", { name: "Move & update links", exact: true }).click();
+  await expect(page.getByRole("treeitem", { name: "cancel/index.md", exact: true })).toBeVisible();
+  expect(await disk("cancel/index.md")).toBe("[Welcome](../notes/welcome.md)\n");
+  expect(errors).toEqual([]);
+});
+
+test("explorer drags multiple selected folders together", async () => {
+  await page.getByRole("treeitem", { name: "src", exact: true }).click();
+  const notes = page.getByRole("treeitem", { name: "notes", exact: true });
+  await notes.click({ modifiers: [shortcut] });
+  await expect(page.getByRole("treeitem", { selected: true })).toHaveCount(2);
+  await notes.dragTo(page.getByRole("treeitem", { name: "archive", exact: true }));
+  await expect(page.getByRole("treeitem", { name: "archive/src", exact: true })).toBeVisible();
+  await expect(page.getByRole("treeitem", { name: "archive/notes", exact: true })).toBeVisible();
+  await expect(page.getByRole("treeitem", { selected: true })).toHaveCount(2);
+  expect(await disk("archive/src/example.py")).toContain("def greet");
+  expect(await disk("index.md")).toBe("[Welcome](archive/notes/welcome.md)\n");
   expect(errors).toEqual([]);
 });
 

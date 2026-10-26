@@ -62,6 +62,11 @@ import { useContextMenu, type MenuItem } from "../components/ContextMenu";
 import { editMenuItems, modKey } from "../lib/edit-menu";
 import { copyImage } from "../lib/image-clipboard";
 import {
+  installMarkdownFileDrop,
+  dropWord,
+  linkDropSpacing,
+} from "../lib/markdown-file-drop";
+import {
   headingSections,
   sectionMenuItems,
   sectionTitle,
@@ -350,6 +355,91 @@ export function MarkdownEditor({
     if (wasLinkOpen.current && !linkDialog) editor?.view.focus();
     wasLinkOpen.current = linkDialog;
   }, [linkDialog, editor]);
+  useEffect(() => {
+    if (!editor) return;
+    const view = editor.view;
+    return installMarkdownFileDrop({
+      path,
+      surface: view.dom.closest<HTMLElement>(".document-scroll")!,
+      position(x, y) {
+        const position = view.posAtCoords({ left: x, top: y });
+        if (!position) return null;
+        const pos = Math.max(
+          1,
+          Math.min(view.state.doc.content.size - 1, position.pos),
+        );
+        const resolved = view.state.doc.resolve(pos);
+        return resolved.parent.isTextblock &&
+          resolved.parent.type.name !== "codeBlock" &&
+          !resolved.marks().some((mark) => mark.type.name === "code")
+          ? pos
+          : null;
+      },
+      word(pos) {
+        const resolved = view.state.doc.resolve(pos);
+        const text = resolved.parent.textBetween(
+          0,
+          resolved.parent.content.size,
+          "\0",
+          "\0",
+        );
+        const word = dropWord(text, resolved.parentOffset);
+        if (!word) return null;
+        const from = resolved.start() + word.from,
+          to = resolved.start() + word.to;
+        let code = false;
+        view.state.doc.nodesBetween(from, to, (node) => {
+          if (node.marks.some((mark) => mark.type.name === "code")) code = true;
+        });
+        return code ? null : { from, to };
+      },
+      text: ({ from, to }) => view.state.doc.textBetween(from, to),
+      dom: (pos) => view.domAtPos(pos),
+      caret: (pos) => view.coordsAtPos(pos),
+      insert({ from, to }, label, href) {
+        const state = view.state,
+          link = state.schema.marks.link.create({ href });
+        const marks = state.doc
+          .resolve(from)
+          .marks()
+          .filter((mark) => mark.type.name !== "link");
+        let transaction = closeHistory(state.tr);
+        let start = from,
+          end = to;
+        if (from === to) {
+          const resolved = state.doc.resolve(from),
+            offset = resolved.parentOffset;
+          const text = resolved.parent.textBetween(
+            0,
+            resolved.parent.content.size,
+            "\0",
+            "\0",
+          );
+          const padding = linkDropSpacing(
+            text[offset - 1] || "",
+            text[offset] || "",
+          );
+          transaction = transaction.insert(
+            from,
+            state.schema.text(padding.before + label + padding.after, marks),
+          );
+          start += padding.before.length;
+          end = start + label.length;
+        }
+        transaction
+          .addMark(start, end, link)
+          .setSelection(TextSelection.create(transaction.doc, end))
+          .setStoredMarks(marks);
+        view.dispatch(transaction.scrollIntoView());
+        view.dispatch(
+          closeHistory(view.state.tr)
+            .setMeta("addToHistory", false)
+            .setMeta("skipTrailingNode", true),
+        );
+        view.focus();
+      },
+    });
+  }, [editor, path]);
   useEffect(() => {
     if (!editor) return;
     const scroll = editor.view.dom.closest(".document-scroll") as HTMLElement;

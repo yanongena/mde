@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef } from "react";
 import { htmlPreviewDocument } from "../lib/html-preview";
+import { previewType } from "../lib/document-mode";
 import {
   positionChanged,
   registerEditor,
@@ -21,6 +22,7 @@ export function HtmlPreview({
   position?: EditorPosition;
 }) {
   const content = useMemo(() => htmlPreviewDocument(path, text), [path, text]);
+  const format = previewType(path) ?? "HTML";
   const frame = useRef<HTMLIFrameElement>(null);
   const saved = useRef(position);
   const textRef = useRef(text);
@@ -65,10 +67,12 @@ export function HtmlPreview({
   );
   return (
     <div className="html-preview">
-      <div className="html-preview-toolbar">HTML preview · Edit in Source</div>
+      <div className="html-preview-toolbar">
+        {format} preview · Edit in Source
+      </div>
       <iframe
         ref={frame}
-        title={`HTML preview for ${path}`}
+        title={`${format} preview for ${path}`}
         sandbox="allow-same-origin"
         referrerPolicy="no-referrer"
         srcDoc={content}

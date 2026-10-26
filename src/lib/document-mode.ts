@@ -1,8 +1,11 @@
 import { isMarkdown, visualProtection } from "./markdown.ts";
 
 export const isHTML = (path: string) => /\.html?$/i.test(path);
+export const isSVG = (path: string) => /\.svg$/i.test(path);
+export const previewType = (path: string) =>
+  isHTML(path) ? "HTML" : isSVG(path) ? "SVG" : null;
 export const supportsVisualMode = (path: string) =>
-  isMarkdown(path) || isHTML(path);
+  isMarkdown(path) || previewType(path) !== null;
 
 export function documentMode(
   path: string,

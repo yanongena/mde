@@ -12,12 +12,14 @@ export function Tooltip() {
   useEffect(() => {
     let anchor: HTMLElement | null = null;
     let timer: ReturnType<typeof setTimeout> | undefined;
+    let dragging = false;
     const hide = () => {
       clearTimeout(timer);
       anchor = null;
       setTarget(null);
     };
     const show = (event: Event) => {
+      if (dragging) return;
       if (event instanceof PointerEvent && event.pointerType === "touch")
         return;
       if (popup.current?.contains(event.target as Node)) return;
@@ -46,7 +48,18 @@ export function Tooltip() {
       hide();
     };
     const keydown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") hide();
+      if (event.key === "Escape") {
+        dragging = false;
+        hide();
+      }
+    };
+    const dragStart = () => {
+      dragging = true;
+      hide();
+    };
+    const dragEnd = () => {
+      dragging = false;
+      hide();
     };
     document.addEventListener("pointerover", show);
     document.addEventListener("pointerout", leave);
@@ -54,6 +67,9 @@ export function Tooltip() {
     document.addEventListener("focusout", leave);
     document.addEventListener("pointerdown", hide, true);
     document.addEventListener("keydown", keydown);
+    document.addEventListener("dragstart", dragStart, true);
+    document.addEventListener("dragend", dragEnd, true);
+    document.addEventListener("drop", dragEnd, true);
     document.addEventListener("scroll", hide, true);
     window.addEventListener("resize", hide);
     window.addEventListener("blur", hide);
@@ -65,6 +81,9 @@ export function Tooltip() {
       document.removeEventListener("focusout", leave);
       document.removeEventListener("pointerdown", hide, true);
       document.removeEventListener("keydown", keydown);
+      document.removeEventListener("dragstart", dragStart, true);
+      document.removeEventListener("dragend", dragEnd, true);
+      document.removeEventListener("drop", dragEnd, true);
       document.removeEventListener("scroll", hide, true);
       window.removeEventListener("resize", hide);
       window.removeEventListener("blur", hide);

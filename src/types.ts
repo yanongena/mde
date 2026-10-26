@@ -139,6 +139,7 @@ export interface MarginAPI {
   readClipboardText(): Promise<string>;
   copyPath(path: string): Promise<void>;
   reveal(path: string): Promise<void>;
+  openInBrowser(path: string): Promise<void>;
   copyImage(pixels: number[]): Promise<void>;
   imageBytes(source: string): Promise<number[]>;
   bootstrap(): Promise<{

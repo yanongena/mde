@@ -17,7 +17,7 @@ import {
   selectAll,
   toggleComment,
 } from "@codemirror/commands";
-import { indentUnit } from "@codemirror/language";
+import { indentUnit, syntaxTree } from "@codemirror/language";
 import { languages } from "@codemirror/language-data";
 import { jsonParseLinter } from "@codemirror/lang-json";
 import { linter, lintGutter } from "@codemirror/lint";
@@ -35,6 +35,12 @@ import { useContextMenu } from "../components/ContextMenu";
 import { editMenuItems, modKey } from "../lib/edit-menu";
 import { isMarkdown } from "../lib/markdown";
 import { markdownSections, sectionMenuItems } from "../lib/sections";
+import {
+  installMarkdownFileDrop,
+  dropWord,
+  markdownFileLink,
+  linkDropSpacing,
+} from "../lib/markdown-file-drop";
 import {
   registerEditor,
   editorHandle,
@@ -317,6 +323,61 @@ export function CodeEditor({
       }),
     });
     view.current = current;
+    const removeFileDrop = isMarkdown(path)
+      ? installMarkdownFileDrop({
+          path,
+          surface: current.scrollDOM,
+          position(x, y) {
+            const pos = current.posAtCoords({ x, y }, false);
+            if (pos === null) return null;
+            for (
+              let node = syntaxTree(current.state).resolveInner(pos, -1);
+              node;
+              node = node.parent!
+            ) {
+              if (
+                /^(FencedCode|CodeBlock|InlineCode|Link|Image|Autolink)$/.test(
+                  node.name,
+                )
+              )
+                return null;
+            }
+            return pos;
+          },
+          word(pos) {
+            const line = current.state.doc.lineAt(pos),
+              word = dropWord(line.text, pos - line.from);
+            return word
+              ? { from: line.from + word.from, to: line.from + word.to }
+              : null;
+          },
+          text: ({ from, to }) => current.state.sliceDoc(from, to),
+          dom: (pos) => current.domAtPos(pos),
+          caret: (pos) => current.coordsAtPos(pos),
+          insert({ from, to }, label, href) {
+            const padding =
+              from === to
+                ? linkDropSpacing(
+                    current.state.sliceDoc(Math.max(0, from - 1), from),
+                    current.state.sliceDoc(to, to + 1),
+                  )
+                : { before: "", after: "" };
+            const insert =
+              padding.before + markdownFileLink(label, href) + padding.after;
+            current.dispatch({
+              changes: { from, to, insert },
+              selection: {
+                anchor: from + insert.length - padding.after.length,
+              },
+              annotations: [
+                Transaction.userEvent.of("input.drop.link"),
+                isolateHistory.of("full"),
+              ],
+            });
+            current.focus();
+          },
+        })
+      : () => {};
     const unregister = registerEditor(path, "source", {
       focus: () => current.focus(),
       selectionVisible: () => {
@@ -468,6 +529,7 @@ export function CodeEditor({
     };
     window.addEventListener("margin:find", find);
     return () => {
+      removeFileDrop();
       cancelled = true;
       window.removeEventListener("margin:goto-line", goto);
       window.removeEventListener("margin:format-document", format);
