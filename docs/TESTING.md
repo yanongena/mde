@@ -15,6 +15,8 @@ npm run test:e2e
 
 ## Coverage
 
+- The two `HTML visual mode` Electron workflows cover Source as the default for `.html`/`.htm`, previews of unsaved contents, relative CSS/SVG assets, inline styles, fragment and workspace links, script/refresh isolation, keyboard save/find, outline navigation into Source, unchanged source bytes, external file updates, and mode/scroll restoration after restart. Run with `npm run test:e2e -- --grep 'HTML visual mode'`. `test-results/html-preview.png` records the rendered preview.
+
 - Four `P3` Electron workflows verify heading menus in Visual/Source/outline, keyboard access and focus, identical encoded links, full long titles, rich clipboard paste and duplicate-heading navigation across notes in both modes, protected Setext documents, unsaved headings, fenced-code exclusions and unchanged bytes when copying. The source regression checks CRLF formatting/undo/redo; cross-note navigation also uses BOM/CRLF/frontmatter offsets. All four passed against both source and rebuilt packaged Apple Silicon Mac applications; all fifteen P1/P2/P3 menu workflows passed together on that build.
 - `sections.test.mjs`: readable inline text, full untruncated titles, Unicode/duplicate/numbered-anchor collisions (including 10,000 repeated headings), BOM/CRLF/frontmatter/Setext/fence ranges and escaped Markdown links resolving encoded filenames from another folder.
 

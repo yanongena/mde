@@ -140,6 +140,82 @@ test.afterEach(async () => {
   });
 });
 
+test("HTML visual mode previews unsaved content and relative assets without changing source", async () => {
+  await page.getByRole("button", { name: "Preferences", exact: true }).click();
+  await page.getByLabel("Automatically format code on open", { exact: true }).uncheck();
+  await page.getByRole("button", { name: "Close preferences" }).click();
+  await open("src/example.html");
+  await expect(page.getByRole("button", { name: "HTML source mode" })).toHaveClass("active");
+  const original = await disk("src/example.html");
+  const html = `<!DOCTYPE html><html><head><base href="https://example.invalid/"><meta http-equiv="refresh" content="0;url=https://example.invalid/"><link rel="stylesheet" href="example.css"></head>
+    <body><h1 style="background: rgb(1, 2, 3)">Unsaved preview</h1>
+    <img src="../assets/preview.svg"><a href="#target">Jump</a>
+    <div style="height: 1400px"></div><h2 id="target">Target</h2>
+    <a href="../notes/other.md">Other note</a>
+    <script>parent.document.body.dataset.previewScript = "executed"</script>
+    </body></html>`;
+  await fs.writeFile(file("assets/preview.svg"), '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24"><rect width="24" height="24" fill="red"/></svg>');
+  await sourceFill(html);
+  await page.getByRole("button", { name: "Visual mode", exact: true }).click();
+  const preview = page.frameLocator('iframe[title="HTML preview for src/example.html"]');
+  await expect(preview.locator("h1")).toHaveText("Unsaved preview");
+  await expect(preview.locator("h1")).toHaveCSS("color", "rgb(0, 128, 0)");
+  await expect(preview.locator("h1")).toHaveCSS("background-color", "rgb(1, 2, 3)");
+  await expect.poll(() => preview.locator("img").evaluate((img) => img.naturalWidth)).toBe(24);
+  await page.screenshot({ path: "test-results/html-preview.png" });
+  expect(await disk("src/example.html")).toBe(original);
+  expect(await page.locator("body").getAttribute("data-preview-script")).toBeNull();
+  await preview.getByRole("link", { name: "Jump", exact: true }).click();
+  await expect(preview.locator("#target")).toBeInViewport();
+  await page.getByRole("button", { name: "HTML source mode" }).click();
+  expect(await page.locator(".editor-pane.active .cm-content").innerText()).toBe(html);
+  await page.getByRole("button", { name: "Visual mode", exact: true }).click();
+  await preview.locator("h1").click();
+  await page.keyboard.press(shortcut + "+f");
+  await expect(page.getByRole("button", { name: "HTML source mode" })).toHaveClass("active");
+  await expect(page.locator(".editor-pane.active .cm-search")).toBeVisible();
+  await page.keyboard.press("Escape");
+  await page.getByRole("button", { name: "Visual mode", exact: true }).click();
+  await preview.locator("h1").click();
+  await page.keyboard.press(shortcut + "+s");
+  await expect.poll(() => disk("src/example.html")).toBe(html);
+  await preview.getByRole("link", { name: "Other note", exact: true }).click();
+  await expect(page.locator(".editor-tab.active")).toHaveAttribute("data-tooltip", "notes/other.md");
+  await expect(page.locator(".editor-pane.active .document-content")).toBeVisible();
+  expect(errors).toEqual([]);
+});
+
+test("HTML visual mode survives external reloads and a restart while HTM defaults to source", async () => {
+  await open("src/example.html");
+  await page.getByRole("button", { name: "Visual mode", exact: true }).click();
+  const preview = page.frameLocator('iframe[title="HTML preview for src/example.html"]');
+  await expect(preview.locator("h1")).toHaveText("Hello");
+  await fs.writeFile(file("src/example.html"), '<html><body><h1>External update</h1><div style="height: 1600px"></div><h2>End</h2></body></html>\n');
+  await expect(preview.locator("h1")).toHaveText("External update");
+  await expect(page.getByRole("button", { name: "Visual mode", exact: true })).toHaveClass("active");
+  await preview.getByRole("heading", { name: "End", exact: true }).scrollIntoViewIfNeeded();
+  await expect.poll(async () => {
+    const state = JSON.parse(await fs.readFile(path.join(data, "state.json"), "utf8"));
+    const tab = state.sessions[root]?.tabs.find((tab) => tab.path === "src/example.html");
+    return tab?.mode === "visual" && tab.position?.scrollTop > 0;
+  }).toBe(true);
+  await app.evaluate(({ app }) => app.exit());
+  await app.close().catch(() => {});
+  await launch();
+  await expect(page.frameLocator('iframe[title="HTML preview for src/example.html"]').locator("h1")).toHaveText("External update");
+  await expect(page.frameLocator('iframe[title="HTML preview for src/example.html"]').getByRole("heading", { name: "End", exact: true })).toBeInViewport();
+  await page.getByRole("button", { name: "Show outline", exact: true }).click();
+  await page.getByRole("complementary", { name: "Document outline" }).getByRole("button", { name: /h2 — End, line/ }).click();
+  await expect(page.getByRole("button", { name: "HTML source mode" })).toHaveClass("active");
+  await expect(page.locator(".editor-pane.active .cm-content")).toBeFocused();
+  await fs.writeFile(file("src/legacy.HTM"), "<h1>Legacy HTML</h1>\n");
+  await open("src/legacy.HTM");
+  await expect(page.getByRole("button", { name: "HTML source mode" })).toHaveClass("active");
+  await page.getByRole("button", { name: "Visual mode", exact: true }).click();
+  await expect(page.frameLocator('iframe[title="HTML preview for src/legacy.HTM"]').locator("h1")).toHaveText("Legacy HTML");
+  expect(errors).toEqual([]);
+});
+
 test("visual authoring, tables, formatting, undo, source mode and repeated serialization", async () => {
   await page
     .locator(".sidebar")

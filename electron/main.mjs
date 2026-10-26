@@ -184,10 +184,13 @@ async function startApplication() {
       if (url.hostname !== "workspace" || !workspace)
         return new Response("", { status: 403 });
       const name = decodeURIComponent(url.pathname.slice(1));
-      if (!/\.(png|jpe?g|gif|webp|bmp|ico|avif)$/i.test(name))
+      if (!/\.(png|jpe?g|gif|webp|bmp|ico|avif|svg|css|woff2?|ttf|otf)$/i.test(name))
         return new Response("", { status: 415 });
       const target = await workspace.resolve(name);
-      return net.fetch(pathToFileURL(target).href);
+      const response = await net.fetch(pathToFileURL(target).href);
+      const headers = new Headers(response.headers);
+      headers.set("Access-Control-Allow-Origin", "*");
+      return new Response(response.body, { status: response.status, headers });
     } catch {
       return new Response("", { status: 404 });
     }

@@ -937,6 +937,27 @@ kbd {
   flex: 1;
   min-height: 0;
 }
+.html-preview {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+.html-preview-toolbar {
+  padding: 8px 18px;
+  border-bottom: 1px solid var(--line);
+  background: var(--surface);
+  color: var(--muted);
+  font-size: 11px;
+}
+.html-preview iframe {
+  flex: 1;
+  width: 100%;
+  min-height: 0;
+  border: 0;
+  background: white;
+  color-scheme: light;
+}
 .code-format-toolbar {
   min-height: 32px;
   display: flex;

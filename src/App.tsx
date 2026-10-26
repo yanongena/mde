@@ -22,6 +22,7 @@ import {
   Save,
   Code2,
   PenLine,
+  Eye,
   Check,
   ArrowUpRight,
   Maximize2,
@@ -57,6 +58,8 @@ import { HistoryDialog } from "./components/HistoryDialog";
 import { ConflictDiff } from "./components/ConflictDiff";
 import { quickFiles, parseFileQuery, lineOffset } from "./lib/quick-open";
 import { ImagePreview } from "./components/ImagePreview";
+import { HtmlPreview } from "./components/HtmlPreview";
+import { documentMode, isHTML, supportsVisualMode } from "./lib/document-mode";
 import { TerminalView } from "./components/TerminalPanel";
 import {
   basename,
@@ -337,10 +340,7 @@ export default function App() {
         ...doc,
         baseline: doc.text,
         dirty: false,
-        mode:
-          isMarkdown(doc.path) && !visualProtection(doc.text)
-            ? tab.mode
-            : "source",
+        mode: documentMode(doc.path, doc.text, tab.mode),
         version: 0,
         suppressAutoFormat: true,
         pinned: replace ? tab.pinned : false,
@@ -442,12 +442,11 @@ export default function App() {
           text: dirty ? saved.text : disk.text,
           dirty,
           revision: dirty ? saved.revision : disk.revision,
-          mode:
-            isMarkdown(saved.path) &&
-            saved.mode !== "source" &&
-            !visualProtection(dirty ? saved.text : disk.text)
-              ? "visual"
-              : "source",
+          mode: documentMode(
+            saved.path,
+            dirty ? saved.text : disk.text,
+            saved.mode,
+          ),
           version: 0,
           position: saved.position,
           suppressAutoFormat: saved.suppressAutoFormat,
@@ -670,7 +669,7 @@ export default function App() {
           dirty: false,
           conflict: undefined,
           version: tab.version + 1,
-          mode: visualProtection(update.disk.text) ? "source" : tab.mode,
+          mode: documentMode(tab.path, update.disk.text, tab.mode),
         };
       }),
     );
@@ -726,7 +725,7 @@ export default function App() {
             ...doc,
             baseline: doc.text,
             dirty: false,
-            mode: isMarkdown(name) && !protection ? "visual" : "source",
+            mode: documentMode(name, doc.text),
             version: 0,
             suppressAutoFormat: target?.preserveText,
           };
@@ -739,12 +738,7 @@ export default function App() {
             : [...previous, tab!],
         );
       }
-      const mode =
-        target?.mode &&
-        isMarkdown(name) &&
-        !(target.mode === "visual" && visualProtection(tab.text))
-          ? target.mode
-          : tab.mode;
+      const mode = documentMode(name, tab.text, target?.mode ?? tab.mode);
       if (target?.position) positions.current.set(name, target.position);
       const mounted =
         activeRef.current === name &&
@@ -923,7 +917,18 @@ export default function App() {
     redrawNavigation((value) => value + 1);
     await persist();
   }
-  function findInDocument(replace = false) {
+  async function findInDocument(replace = false) {
+    const tab = tabsRef.current.find((tab) => tab.path === activeRef.current);
+    if (
+      tab &&
+      isHTML(tab.path) &&
+      tab.mode === "visual" &&
+      !(await openFile(tab.path, undefined, {
+        mode: "source",
+        preserveText: true,
+      }))
+    )
+      return;
     if (activeRef.current && !isImage(activeRef.current))
       window.dispatchEvent(
         new CustomEvent("margin:find", {
@@ -1641,7 +1646,7 @@ export default function App() {
                 dirty: false,
                 conflict: undefined,
                 version: t.version + 1,
-                mode: visualProtection(disk.text) ? "source" : t.mode,
+                mode: documentMode(t.path, disk.text, t.mode),
               }
             : t,
         ),
@@ -1685,7 +1690,7 @@ export default function App() {
     }
   }
   async function toggleMode(tab: Tab) {
-    if (tab.mode === "source") {
+    if (tab.mode === "source" && isMarkdown(tab.path)) {
       const reason = visualProtection(tab.text);
       if (reason) {
         notify(
@@ -2083,10 +2088,10 @@ export default function App() {
       shortcut: `${keyboard}+,`,
       run: () => setShowSettings(true),
     },
-    ...(current && isMarkdown(current.path)
+    ...(current && supportsVisualMode(current.path)
       ? [
           {
-            name: "Toggle Markdown source / visual",
+            name: `Toggle ${isHTML(current.path) ? "HTML" : "Markdown"} source / visual`,
             run: () => toggleMode(current),
           },
         ]
@@ -2958,7 +2963,7 @@ export default function App() {
                     <Check size={12} /> Saved
                   </span>
                 )}
-                {isMarkdown(current.path) && (
+                {supportsVisualMode(current.path) && (
                   <div className="mode-switch">
                     <button
                       aria-label="Visual mode"
@@ -2967,10 +2972,19 @@ export default function App() {
                         if (current.mode !== "visual") void toggleMode(current);
                       }}
                     >
-                      <PenLine size={13} /> Visual
+                      {isHTML(current.path) ? (
+                        <Eye size={13} />
+                      ) : (
+                        <PenLine size={13} />
+                      )}{" "}
+                      Visual
                     </button>
                     <button
-                      aria-label="Markdown source mode"
+                      aria-label={
+                        isHTML(current.path)
+                          ? "HTML source mode"
+                          : "Markdown source mode"
+                      }
                       className={current.mode === "source" ? "active" : ""}
                       onClick={() => {
                         if (current.mode !== "source") void toggleMode(current);
@@ -3121,6 +3135,14 @@ export default function App() {
                 )}
                 {isImage(tab.path) ? (
                   <ImagePreview path={tab.path} />
+                ) : isHTML(tab.path) && tab.mode === "visual" ? (
+                  <HtmlPreview
+                    path={tab.path}
+                    text={tab.text}
+                    onLink={(href) => void followLink(tab.path, href)}
+                    onActivate={() => focusPane(tab.path)}
+                    position={positions.current.get(tab.path) || tab.position}
+                  />
                 ) : isMarkdown(tab.path) && tab.mode === "visual" ? (
                   <MarkdownEditor
                     path={tab.path}
@@ -3236,6 +3258,8 @@ export default function App() {
                 onNavigate={(item) => {
                   void openFile(current.path, undefined, {
                     range: { from: item.from, to: item.from },
+                    mode: isHTML(current.path) ? "source" : current.mode,
+                    preserveText: isHTML(current.path),
                   });
                 }}
               />
@@ -3550,7 +3574,7 @@ export default function App() {
                       ...entry,
                       text,
                       dirty: text !== entry.baseline,
-                      mode: visualProtection(text) ? "source" : entry.mode,
+                      mode: documentMode(entry.path, text, entry.mode),
                     }
                   : entry,
               ),
