@@ -4,6 +4,7 @@ import path from "node:path";
 import os from "node:os";
 
 let app, page, base, root, data, errors;
+let hiddenWindows;
 const shortcut = process.platform === "darwin" ? "Meta" : "Control";
 const file = (name) => path.join(root, name);
 async function disk(name) {
@@ -59,6 +60,7 @@ async function launch(devURL) {
     ...process.env,
     MARGIN_DATA_PATH: data,
     MARGIN_WORKSPACE: root,
+    MARGIN_TEST_HIDDEN: hiddenWindows ? "1" : "0",
     ...(devURL ? { MARGIN_DEV_URL: devURL } : {}),
   };
   delete env.ELECTRON_RUN_AS_NODE;
@@ -70,13 +72,18 @@ async function launch(devURL) {
     env,
   });
   page = await app.firstWindow();
+  // Verify every launch, including restarts, really honors the quiet test mode.
+  expect(await app.evaluate(({ BrowserWindow }) =>
+    BrowserWindow.getAllWindows().some((window) => window.isVisible()),
+  )).toBe(!hiddenWindows);
   errors = [];
   page.on("pageerror", (error) => errors.push(error.message));
   await expect(
     page.getByRole("treeitem", { name: "notes/welcome.md", exact: true }),
   ).toBeVisible();
 }
-test.beforeEach(async () => {
+test.beforeEach(async ({}, testInfo) => {
+  hiddenWindows = testInfo.project.use.headless !== false;
   base = await fs.mkdtemp(path.join(os.tmpdir(), "margin-e2e-"));
   root = path.join(base, "Workspace");
   data = path.join(base, "data");
@@ -122,6 +129,12 @@ test("development server renders the real application", async () => {
     await expect(page.locator(".editor-pane.active h1")).toHaveText(
       "A quieter workspace",
     );
+    const exported = await page.evaluate(() => window.margin.pdfExport({ path: "notes/welcome.md", mode: "combined", recursive: true, overlays: [] }));
+    expect(exported.failed).toEqual([]);
+    await expect(page.getByRole("treeitem", { name: "notes/welcome.pdf", exact: true })).toBeVisible();
+    await open("notes/welcome.pdf");
+    await expect(page.locator(".pdf-preview .page canvas").first()).toBeVisible();
+    await expect(page.locator(".pdf-preview .textLayer").first()).toContainText("A quieter workspace");
     expect(errors).toEqual([]);
   } finally {
     await server.close();
@@ -138,6 +151,156 @@ test.afterEach(async () => {
     maxRetries: 5,
     retryDelay: 200,
   });
+});
+
+test("PDF viewer opens exported documents inside tabs with navigation, text search and zoom", async () => {
+  const result = await page.evaluate(() => window.margin.pdfExport({
+    path: "notes", mode: "combined", recursive: true,
+    overlays: [
+      { path: "notes/other.md", text: "# Eerste pagina\n\nCafé en België.\n\n[Website](https://example.com)" },
+      { path: "notes/welcome.md", text: "# Tweede pagina\n\nUnieke zoekterm: wandelpad." },
+    ],
+  }));
+  expect(result.failed).toEqual([]);
+  const before = await fs.readFile(file("notes.pdf"));
+  await expect(page.getByRole("treeitem", { name: "notes.pdf", exact: true })).toBeVisible();
+  await open("notes.pdf");
+  const viewer = page.getByLabel("PDF viewer for notes.pdf", { exact: true });
+  await expect(viewer.getByLabel("PDF page count", { exact: true })).toHaveText("/ 2");
+  await expect(viewer.locator('.page[data-page-number="1"] canvas')).toBeVisible();
+  await expect(viewer.locator(".textLayer")).toContainText(["Café en België."]);
+  await expect(page.getByRole("button", { name: "Save file", exact: true })).toBeDisabled();
+  await expect(page.getByRole("button", { name: "Markdown source mode", exact: true })).toHaveCount(0);
+  await expect(viewer.getByRole("group", { name: "PDF zoom controls", exact: true })).toBeVisible();
+  await expect(viewer.getByRole("button", { name: "Zoom out PDF", exact: true })).toHaveText("Zoom out");
+  await expect(viewer.getByRole("button", { name: "Zoom in PDF", exact: true })).toHaveText("Zoom in");
+  await viewer.getByLabel("PDF zoom", { exact: true }).click();
+  await expect(viewer.getByLabel("PDF zoom", { exact: true })).toHaveText("100%");
+  await viewer.getByRole("button", { name: "Zoom out PDF", exact: true }).click();
+  await expect(viewer.getByLabel("PDF zoom", { exact: true })).toHaveText("80%");
+  await viewer.getByRole("button", { name: "Zoom in PDF", exact: true }).click();
+  await expect(viewer.getByLabel("PDF zoom", { exact: true })).toHaveText("100%");
+  const initialZoom = await viewer.getByLabel("PDF zoom", { exact: true }).textContent();
+  await viewer.getByRole("button", { name: "Zoom in PDF", exact: true }).click();
+  await expect(viewer.getByLabel("PDF zoom", { exact: true })).not.toHaveText(initialZoom);
+  await viewer.getByRole("button", { name: "Fit PDF to width", exact: true }).click();
+  await viewer.getByRole("button", { name: "Next PDF page", exact: true }).click();
+  await expect(viewer.getByLabel("PDF page", { exact: true })).toHaveValue("2");
+  await expect(viewer.locator('.page[data-page-number="2"] canvas')).toBeVisible();
+  await viewer.getByLabel("PDF page", { exact: true }).fill("1");
+  await viewer.getByLabel("PDF page", { exact: true }).press("Enter");
+  await expect(viewer.getByLabel("PDF page", { exact: true })).toHaveValue("1");
+  await viewer.getByLabel("PDF pages", { exact: true }).focus();
+  await page.keyboard.press(shortcut + "+f");
+  await expect(viewer.getByRole("textbox", { name: "Find in PDF", exact: true })).toBeFocused();
+  await viewer.getByRole("textbox", { name: "Find in PDF", exact: true }).fill("wandelpad");
+  await expect(viewer.getByLabel("PDF search results", { exact: true })).toHaveText("1 / 1");
+  await expect(viewer.locator(".textLayer .highlight.selected")).toContainText("wandelpad");
+  await expect(viewer.getByLabel("PDF page", { exact: true })).toHaveValue("2");
+  await open("notes/welcome.md");
+  await page.locator('.editor-tab[data-tooltip="notes.pdf"]').click();
+  await expect(viewer.getByLabel("PDF page", { exact: true })).toHaveValue("2");
+  if (process.env.MARGIN_PDF_QA) {
+    await fs.mkdir(process.env.MARGIN_PDF_QA, { recursive: true });
+    await page.screenshot({ path: path.join(process.env.MARGIN_PDF_QA, "pdf-viewer.png") });
+  }
+  await expect.poll(async () => {
+    const state = JSON.parse(await fs.readFile(path.join(data, "state.json"), "utf8"));
+    return state.sessions[root]?.tabs.find((tab) => tab.path === "notes.pdf")?.position?.pdf?.page;
+  }).toBe(2);
+  await app.evaluate(({ app }) => app.exit());
+  await app.close().catch(() => {});
+  await launch();
+  await expect(page.getByLabel("PDF page", { exact: true })).toHaveValue("2");
+  expect(await fs.readFile(file("notes.pdf"))).toEqual(before);
+  expect(errors).toEqual([]);
+});
+
+test("PDF viewer reports invalid files and reloads replaced PDFs without opening an external browser", async () => {
+  await fs.writeFile(file("broken.pdf"), "This is not a PDF");
+  await expect(page.getByRole("treeitem", { name: "broken.pdf", exact: true })).toBeVisible();
+  await open("broken.pdf");
+  await expect(page.getByRole("alert")).toContainText("not a valid PDF");
+  const exported = await page.evaluate(() => window.margin.pdfExport({ path: "notes", mode: "combined", recursive: true, overlays: [] }));
+  expect(exported.failed).toEqual([]);
+  await fs.copyFile(file("notes.pdf"), file("broken.pdf"));
+  await expect(page.getByLabel("PDF page count", { exact: true })).toHaveText("/ 2");
+  await expect(page.locator('.pdf-preview .page[data-page-number="1"] canvas')).toBeVisible();
+  await expect(page.getByRole("alert")).toHaveCount(0);
+  await expect(page.locator(".editor-pane.active .cm-content")).toHaveCount(0);
+  expect(errors).toEqual([]);
+});
+
+test("PDF export uses unsaved Markdown, prints real PDFs and preserves existing exports", async () => {
+  await fs.writeFile(file("assets/export.svg"), '<svg xmlns="http://www.w3.org/2000/svg" width="600" height="120"><rect width="600" height="120" rx="10" fill="#245e55"/><text x="24" y="72" fill="white" font-size="32">Margin PDF export</text></svg>');
+  await open("notes/welcome.md");
+  await page.getByRole("button", { name: "Markdown source mode", exact: true }).click();
+  const text = '# PDF export · België\n\nDeze **niet-opgeslagen** versie hoort in de PDF.\n\n![Export](../assets/export.svg)\n\n## Tabel\n\n| Naam | Waarde |\n| --- | --- |\n| Café | € 42 |\n\n- [x] Export getest\n- [ ] Nog te doen\n\n```js\nconst answer = 42;\n```\n\n> Een rustige leesbare PDF.\n';
+  await sourceFill(text);
+  await page.locator(".editor-tab.active").click({ button: "right" });
+  await page.getByRole("menuitem", { name: "Export to PDF…", exact: true }).click();
+  const dialog = page.getByRole("dialog", { name: "Export to PDF", exact: true });
+  await expect(dialog.getByLabel("PDF export preview")).toContainText("1 Markdown file → 1 PDF");
+  await dialog.getByRole("button", { name: "Export PDF", exact: true }).click();
+  await expect(dialog.getByRole("status")).toContainText("Export complete. 1 PDF saved.");
+  const bytes = await fs.readFile(file("notes/welcome.pdf"));
+  expect(bytes.subarray(0, 5).toString()).toBe("%PDF-");
+  expect(bytes.length).toBeGreaterThan(5000);
+  expect(await disk("notes/welcome.md")).toContain("A quieter workspace");
+  // Retain an optional QA sample without making external PDF tooling a test dependency.
+  if (process.env.MARGIN_PDF_QA) {
+    await fs.mkdir(process.env.MARGIN_PDF_QA, { recursive: true });
+    await fs.writeFile(path.join(process.env.MARGIN_PDF_QA, "markdown-export.pdf"), bytes);
+    await page.screenshot({ path: path.join(process.env.MARGIN_PDF_QA, "export-dialog.png") });
+  }
+  await dialog.getByRole("button", { name: "Done", exact: true }).click();
+  await page.getByRole("treeitem", { name: "notes/welcome.md", exact: true }).click({ button: "right" });
+  await page.getByRole("menuitem", { name: "Export to PDF…", exact: true }).click();
+  await expect(dialog.getByLabel("PDF export preview")).toContainText("welcome (2).pdf");
+  await dialog.getByRole("button", { name: "Export PDF", exact: true }).click();
+  await expect(dialog.getByRole("status")).toContainText("Export complete.");
+  expect(await fs.readFile(file("notes/welcome.pdf"))).toEqual(bytes);
+  expect((await fs.readFile(file("notes/welcome (2).pdf"))).subarray(0, 5).toString()).toBe("%PDF-");
+  expect(errors).toEqual([]);
+});
+
+test("folder PDF export supports combined, subfolders, individual files and custom destinations", async () => {
+  await fs.mkdir(file("notes/chapter/deep"), { recursive: true });
+  await fs.writeFile(file("notes/chapter/a.md"), "# Chapter\n\nA chapter note.");
+  await fs.writeFile(file("notes/chapter/deep/b.md"), "# Nested\n\nA nested note.");
+  const combined = await page.evaluate(() => window.margin.pdfExport({ path: "notes", mode: "combined", recursive: true, overlays: [] }));
+  expect(combined.failed).toEqual([]);
+  expect(combined.paths).toEqual([file("notes.pdf")]);
+  await page.getByRole("treeitem", { name: "notes", exact: true }).click({ button: "right" });
+  await page.getByRole("menuitem", { name: "Export to PDF…", exact: true }).click();
+  const dialog = page.getByRole("dialog", { name: "Export to PDF", exact: true });
+  await expect(dialog.getByLabel("PDF export preview")).toContainText("4 Markdown files → 1 PDF");
+  await dialog.getByLabel("Include nested folders").uncheck();
+  await expect(dialog.getByLabel("PDF export preview")).toContainText("2 Markdown files → 1 PDF");
+  await dialog.getByLabel("Include nested folders").check();
+  await dialog.getByLabel("PDF layout").selectOption("subfolders");
+  await expect(dialog.getByLabel("PDF export preview")).toContainText("4 Markdown files → 2 PDFs");
+  await dialog.getByRole("button", { name: "Export PDF", exact: true }).click();
+  await expect(dialog.getByRole("status")).toContainText("Export complete. 2 PDFs saved.");
+  for (const name of ["notes.pdf", "notes (2).pdf", "notes/chapter.pdf"])
+    expect((await fs.readFile(file(name))).subarray(0, 5).toString()).toBe("%PDF-");
+  await dialog.getByRole("button", { name: "Done", exact: true }).click();
+  await page.getByRole("treeitem", { name: "notes", exact: true }).click({ button: "right" });
+  await page.getByRole("menuitem", { name: "Export to PDF…", exact: true }).click();
+  await dialog.getByLabel("PDF layout").selectOption("files");
+  const destination = path.join(base, "pdf-exports");
+  await fs.mkdir(destination);
+  await app.evaluate(({ dialog }, directory) => {
+    dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [directory] });
+  }, destination);
+  await dialog.getByRole("button", { name: "Choose folder…", exact: true }).click();
+  await expect(dialog.getByLabel("PDF export preview")).toContainText("4 Markdown files → 4 PDFs");
+  await expect(dialog.getByLabel("PDF export preview")).toContainText(destination);
+  await dialog.getByRole("button", { name: "Export PDF", exact: true }).click();
+  await expect(dialog.getByRole("status")).toContainText("Export complete. 4 PDFs saved.");
+  for (const name of ["welcome.pdf", "other.pdf", "chapter/a.pdf", "chapter/deep/b.pdf"])
+    expect((await fs.readFile(path.join(destination, name))).subarray(0, 5).toString()).toBe("%PDF-");
+  expect(errors).toEqual([]);
 });
 
 test("HTML visual mode previews unsaved content and relative assets without changing source", async () => {
@@ -285,7 +448,7 @@ test("SVG visual mode survives external updates and restart and retains malforme
   expect(errors).toEqual([]);
 });
 
-test("visual authoring, tables, formatting, undo, source mode and repeated serialization", async () => {
+test("visual authoring, tables, formatting, undo, source mode and repeated serialization", { tag: "@smoke" }, async () => {
   await page
     .locator(".sidebar")
     .getByRole("button", { name: "New document", exact: true })
@@ -447,7 +610,7 @@ test("native clipboard image, file insertion, image/folder/note moves and cross-
   expect(errors).toEqual([]);
 });
 
-test("all requested code languages highlight, edit/save, search/replace, diagnostics and external changes", async () => {
+test("all requested code languages highlight, edit/save, search/replace, diagnostics and external changes", { tag: "@smoke" }, async () => {
   for (const ext of [
     "py",
     "php",
@@ -593,7 +756,7 @@ test("PowerShell PTYs, multiple interactive terminals, layout and session restor
   expect(errors).toEqual([]);
 });
 
-test("autosave, quick open, dirty drafts across forced restart and unsupported Markdown protection", async () => {
+test("autosave, quick open, dirty drafts across forced restart and unsupported Markdown protection", { tag: "@smoke" }, async () => {
   await open("notes/welcome.md");
   await page.getByRole("button", { name: "Markdown source mode" }).click();
   await sourceFill("# A draft worth recovering\n");
@@ -3841,7 +4004,8 @@ test("Markdown source drop previews a word and inserts a link as one undo step w
   await editor.press(shortcut + "+z");
   await expect(editor).toContainText("Hello target world.");
   await expect(editor).not.toContainText("[target]");
-  await editor.press(shortcut + "+y");
+  await editor.press(process.platform === "darwin" ? "Meta+Shift+z" : "Control+y");
+  await expect(editor).toContainText("Hello [target](other.md) world.");
   await save();
   expect(await disk("notes/welcome.md")).toBe(original.replace("target", "[target](other.md)"));
   expect(await disk("notes/other.md")).toContain("# Other");

@@ -1892,6 +1892,38 @@ kbd {
   max-height: calc(100vh - 48px);
   overflow: auto;
 }
+.pdf-export-dialog {
+  width: 640px;
+  max-height: calc(100vh - 48px);
+  overflow: auto;
+}
+.pdf-preview { display: flex; flex: 1; flex-direction: column; min-height: 0; min-width: 0; overflow: hidden; }
+.pdf-toolbar, .pdf-find { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 8px 12px; border-bottom: 1px solid var(--line); color: var(--quiet); font-size: 12px; }
+.pdf-toolbar .icon-button svg, .pdf-find .icon-button svg { width: 15px; height: 15px; }
+.pdf-page-label { display: flex; align-items: center; gap: 6px; }
+.pdf-page-label input { width: 60px; padding: 4px 6px; font-size: 12px; }
+.pdf-zoom-controls { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.pdf-zoom-button, .pdf-scale { min-height: 32px; padding: 6px 10px; color: var(--text); background: var(--surface); white-space: nowrap; }
+.pdf-scale { min-width: 60px; text-align: center; font-variant-numeric: tabular-nums; font-weight: 600; }
+.pdf-toolbar-divider { width: 1px; align-self: stretch; background: var(--line); margin: 0 4px; }
+.pdf-find input { flex: 1; min-width: 100px; border: 0; padding: 4px; font-size: 12px; }
+.pdf-find > span { font-variant-numeric: tabular-nums; }
+.pdf-viewport-host { position: relative; flex: 1; min-height: 0; }
+.pdf-viewport { position: absolute; inset: 0; overflow: auto; background: #d7d9d6; }
+.pdf-viewport .pdfViewer { --viewer-container-height: 100%; padding: 12px 0; }
+.pdf-notice, .pdf-password { padding: 20px; font-size: 13px; line-height: 1.7; }
+.pdf-password { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+.pdf-password p { flex-basis: 100%; margin: 0; }
+.pdf-password label { display: flex; gap: 8px; align-items: center; }
+.pdf-export-dialog > label { margin-bottom: 14px; }
+.pdf-export-dialog select { padding: 10px; font-size: 13px; width: 100%; }
+.pdf-export-dialog .pdf-checkbox { flex-direction: row; align-items: center; }
+.pdf-source, .pdf-destination span, .pdf-plan div { overflow-wrap: anywhere; }
+.pdf-destination { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-bottom: 16px; font-size: 12px; }
+.pdf-destination span { flex: 1; min-width: 160px; }
+.pdf-destination button { padding: 7px 10px; font-size: 11px; }
+.pdf-plan { padding: 14px; border: 1px solid var(--line); border-radius: 7px; font-size: 11px; line-height: 1.8; max-height: 220px; overflow: auto; }
+.pdf-plan strong { display: block; margin-bottom: 8px; }
 .action-dialog h2 {
   font-size: 20px;
   letter-spacing: -0.4px;

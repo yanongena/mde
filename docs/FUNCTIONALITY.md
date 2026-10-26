@@ -2,6 +2,30 @@
 
 Verification date: 25 October 2026. Hosts: Windows 11 x64 (original verification) and macOS 27.0.1 arm64 (local Mac build).
 
+## PDF export update — 26 October 2026
+
+Markdown file/tab menus, folder/root explorer menus, the command palette and the native File menu offer PDF export. Folder layouts combine all included notes, combine each immediate subfolder's descendants (with direct notes in their own folder-named PDF), or produce one PDF per Markdown file. Nested folders can be excluded. Default PDFs sit beside their source file/folder, including beside the workspace root for a whole-workspace export. A system-picked output directory is optional; individual-file exports preserve relative subdirectories there. A preview lists output paths and counts. Existing PDFs are never replaced: both planning and exclusive creation allocate numbered filenames.
+
+Export snapshots current editor buffers without saving the Markdown. A4 rendering includes GFM tables/tasks, fenced code, sanitized HTML, local images and HTTPS images, with page numbers and a new page for each combined source. YAML frontmatter is omitted. Missing or unsupported images report the affected PDF as failed; completed outputs are retained on partial failure or cancellation. Printing runs in a hidden, sandboxed Electron window, excludes document scripts and checks local images through workspace path/symlink validation. Individual local images are limited to 20 MB and each PDF render times out after 60 seconds. Workspace moves/saves queue behind an export; switching workspaces requires finishing or cancelling it.
+
+Verified in source: production build, all **77 Node tests** and both new Electron export workflows. The full **81-workflow** Electron regression run passed 80 workflows initially; the remaining source-drop redo test used a Windows-only redo shortcut on macOS. Correcting that test to Cmd+Shift+Z and waiting for the restored link made the targeted rerun pass, together with both PDF workflows. No editor behavior was changed for that correction. PDF visual review and text extraction verified Unicode, the euro symbol, tables, checkboxes, local SVG, code, page numbering and unsaved text. The Mac application and DMG are rebuilt for this update; Windows artifacts are unchanged.
+
+Both PDF export workflows also passed against the rebuilt packaged Apple Silicon Mac app. App signature and DMG integrity verification passed, and `release/SHA256SUMS-mac.txt` contains the refreshed installer checksum.
+
+## PDF viewer update — 26 October 2026
+
+PDF files now open inside ordinary read-only tabs, including through Markdown links, Quick Open and split view. The bundled PDF.js viewer provides continuous scrolling, previous/next and direct page navigation, bounded zoom, fit-to-width, selectable text and text search with highlighted results. Cmd/Ctrl+F focuses PDF search. Page, zoom and scroll position use the existing per-tab/session history and survive restarting. PDF changes on disk reload the viewer; invalid or missing files report an inline error. Password-protected PDFs prompt for their password. Local files are limited to 100 MB, read as binary through validated workspace paths, and excluded from source editing, Save As, version history and text-format status indicators. Scanned pages need a text layer for searching; OCR and PDF editing are not included.
+
+The viewer, worker, character maps, standard fonts, image decoders and annotation icons are bundled for offline use in development and packaged builds. PDF scripts are not enabled; clicked HTTP(S) web links use the existing external-link handler and document links cannot replace the app. Rendering is deferred for unopened background tabs and viewer observers/workers are disposed on close.
+
+Verified: production build and all **79 Node tests**, including binary PDF reading, traversal/symlink/size validation, file classification and session state validation. Both new source Electron viewer workflows passed, covering actual canvas/text rendering, navigation, zoom, Cmd/Ctrl+F, highlighted text search, tab switching, saved session restoration, unchanged PDF bytes, invalid-file errors and automatic reload. The development-server workflow also opens an exported PDF and checks its rendered text, exercising the worker and asset paths under Vite.
+
+The full **83-workflow source Electron regression suite passed** after the viewer integration, including the existing export, editor, image, file-move, terminal, history, session and split-view workflows.
+
+The rebuilt Apple Silicon Mac app passed all four PDF viewer/export workflows. Its ad-hoc signature and DMG integrity checks passed, and the installer checksum was refreshed. Windows binaries are unchanged.
+
+The PDF toolbar now uses larger bordered controls with visible **Zoom out**, **Zoom in** and **Fit width** labels. Clicking the percentage resets zoom to 100%. The production build and both source viewer workflows passed, including explicit 100% → 80% → 100% zoom checks. The rebuilt Mac app passed the navigation/search/zoom/session workflow; signature and DMG verification passed and its checksum was refreshed.
+
 ## Image preview update
 
 Standalone image tabs support scroll-wheel/trackpad zoom centered at the pointer, drag-to-pan, toolbar zoom/actual-size/fit controls, double-click fit and keyboard controls. Zoom is bounded at 1600%, with a lower bound of 5% or the fit scale when smaller. Fitted images adapt to viewport resizing. Each mounted tab retains its own zoom/pan when switching documents; views reset after closing/reopening the tab or restarting. Image viewing never rewrites the image file.

@@ -13,7 +13,10 @@
     "start": "electron .",
     "test": "node --test tests/*.test.mjs",
     "test:e2e": "playwright test",
-    "check": "npm run build && npm test && npm run test:e2e",
+    "test:e2e:smoke": "playwright test --grep @smoke",
+    "test:e2e:headed": "playwright test --headed",
+    "check": "npm run build && npm test",
+    "check:full": "npm run check && npm run test:e2e",
     "dist:win": "npm run build && electron-builder --win nsis --x64",
     "dist:mac": "npm run build && electron-builder --mac dmg",
     "dist:mac:local": "npm run build && electron-builder --mac dmg -c.mac.identity=- -c.mac.hardenedRuntime=false",
@@ -88,10 +91,15 @@
     "lucide-react": "^1.61.0",
     "node-pty": "1.2.0-beta.18",
     "nspell": "^2.1.5",
+    "pdfjs-dist": "^6.4.299",
     "react": "^19.3.1",
     "react-dom": "^19.3.1",
+    "rehype-raw": "^7.0.0",
+    "rehype-sanitize": "^6.0.0",
+    "rehype-stringify": "^10.0.1",
     "remark-gfm": "^4.0.1",
     "remark-parse": "^11.0.0",
+    "remark-rehype": "^11.1.2",
     "unified": "^11.0.5",
     "unist-util-visit": "^5.2.0"
   },
@@ -109,7 +117,8 @@
     "prettier": "^3.9.10",
     "sharp": "^0.35.5",
     "typescript": "^7.0.2",
-    "vite": "^8.3.5"
+    "vite": "^8.3.5",
+    "vite-plugin-static-copy": "^4.1.1"
   },
   "allowScripts": {
     "node-pty@1.2.0-beta.18": true,

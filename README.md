@@ -42,8 +42,12 @@ The Vite server listens on `127.0.0.1:5173`. `npm run dev` launches Electron and
 npm run build          # TypeScript check + production renderer
 npm start              # Run that production renderer in Electron
 npm test               # Filesystem, references, recovery and real PTY tests
-npm run test:e2e        # Real Electron workflow tests
-npm run check          # All three checks above
+npm run check          # Normal local check: build + Node tests, no windows
+npm run test:e2e:smoke  # Three core Electron workflows, hidden windows
+npm run test:e2e -- --grep 'PDF' # Targeted Electron workflows, hidden windows
+npm run test:e2e        # All Electron workflows, hidden windows
+npm run test:e2e:headed # Visible Electron windows for interactive debugging
+npm run check:full     # Full regression: build + Node + all Electron workflows
 npm run dist:win        # Windows x64 NSIS installer + unpacked application
 npm run dist:mac        # Run on a Mac to produce a DMG
 npm run dist:mac:local  # Ad-hoc signed DMG for local use without a certificate
@@ -55,6 +59,8 @@ Windows and Apple Silicon macOS packaging have been exercised. See [the function
 
 ## Everyday use
 
+- PDF files open directly in a read-only app tab. Use the toolbar to change pages, **Zoom out**, **Zoom in** or **Fit width**; clicking the zoom percentage resets it to 100%. **Cmd/Ctrl+F** searches selectable text inside the PDF. The current page, zoom and scroll position survive tab switches and app restarts. PDFs can also be viewed beside another document in split view. Local PDF files up to 100 MB are supported, including password-protected documents; changed files reload automatically. Scanned pages require an existing text layer for search.
+- **Export to PDF…** is available in Markdown file/tab context menus, folder context menus, the command palette and the native File menu. Export one note, combine a folder into one PDF, create one PDF per immediate subfolder (including its nested notes, with directly contained notes in a separate PDF), or create one PDF per Markdown file. Nested folders are optional. A preview shows the files and destinations. By default each PDF is saved beside its source file/folder; **Choose folder…** uses another destination and preserves relative folders for individual-file exports. Current editor contents, including unsaved edits, are exported without saving the Markdown. Existing PDFs are preserved with numbered filenames. A4 output supports tables, tasks, code, safe embedded HTML and local/HTTPS images; each combined document starts on a new page. Cancellation keeps completed PDFs and reports their locations.
 - **Preferences → Spelling** turns spelling checks on or off and chooses Dutch, English (US/UK), French, German or the system language (English US fallback for unsupported system languages). Dictionaries are included and work offline on Windows and macOS. Visual Markdown checks all occurrences in headings, paragraphs, lists and tables; inline code and code blocks are skipped. Changing the language, editing, undoing or reloading rechecks the document without changing its contents or undo history. Spelling does not check grammar.
 - Preferences has separate **Reading font size**, **Reading line height** and **Reading text width** for visual documents. These settings affect the view and persist across restart without rewriting notes.
 - **Local version history** in the tab menu, command palette or tab-bar button shows earlier saved text with an aligned comparison. **Restore to editor** loads a selected version without changing the disk file until you save; the current editor contents are first kept as a recovery snapshot when history is enabled. History follows app-initiated file moves. Preferences sets retention per file and a shared storage limit across workspaces; disabling history stops new snapshots and keeps existing ones. This text history is separate from move-recovery journals and regular draft recovery.

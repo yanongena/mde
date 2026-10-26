@@ -26,8 +26,15 @@ import { selectionRoots } from "./selection.mjs";
 import { savedPosition } from "./session.mjs";
 import { createSpellcheck } from "./spellcheck.mjs";
 import { openInBrowser } from "./browser.mjs";
+import { randomUUID } from "node:crypto";
+import { planPdfExport, exportPdf } from "./pdf-export.mjs";
+import { renderPdf } from "./pdf-window.mjs";
+import { readPdf } from "./pdf-files.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
+const hiddenTestWindows = process.env.MARGIN_TEST_HIDDEN === "1";
+if (hiddenTestWindows && process.platform === "darwin")
+  app.setActivationPolicy("accessory");
 if (process.env.MARGIN_DATA_PATH)
   app.setPath("userData", path.resolve(process.env.MARGIN_DATA_PATH));
 protocol.registerSchemesAsPrivileged([
@@ -70,6 +77,8 @@ let win,
   confirmedClose = false;
 let watcherTimer, startupError;
 let searchJob;
+let pdfJob;
+const pdfDestinations = new Map();
 const stateFile = () => path.join(app.getPath("userData"), "state.json");
 let preferenceQueue = Promise.resolve();
 function queuePreferences(action) {
@@ -89,6 +98,8 @@ const send = (channel, value) => {
 };
 
 async function openWorkspace(root) {
+  if (pdfJob) throw new Error("Wait for the PDF export to finish or cancel it first.");
+  pdfDestinations.clear();
   searchJob?.controller.abort();
   const resolved = path.resolve(root);
   if (!(await fs.stat(resolved)).isDirectory())
@@ -255,6 +266,52 @@ async function startApplication() {
     return openWorkspace(root);
   });
   handle("workspace:tree", () => requireWorkspace().tree());
+  function pdfDestination(request) {
+    if (!request.destination) return undefined;
+    const directory = pdfDestinations.get(request.destination);
+    if (!directory) throw new Error("Choose the export folder again.");
+    return directory;
+  }
+  handle("pdf:choose-destination", async (sourcePath) => {
+    const current = requireWorkspace();
+    const source = await current.resolve(sourcePath);
+    const result = await dialog.showOpenDialog(win, {
+      title: "Choose PDF export folder",
+      defaultPath: path.dirname(source),
+      properties: ["openDirectory", "createDirectory"],
+    });
+    if (result.canceled) return null;
+    if (current !== requireWorkspace())
+      throw new Error("The workspace changed. Choose the folder again.");
+    const id = randomUUID();
+    const directory = await fs.realpath(result.filePaths[0]);
+    pdfDestinations.set(id, directory);
+    return { id, path: directory };
+  });
+  handle("pdf:plan", (request) =>
+    planPdfExport(requireWorkspace(), request, pdfDestination(request)),
+  );
+  handle("pdf:export", async (request) => {
+    if (pdfJob) throw new Error("A PDF export is already running.");
+    const current = requireWorkspace();
+    const destination = pdfDestination(request);
+    const controller = new AbortController();
+    pdfJob = controller;
+    try {
+      return await current.mutate(() =>
+        exportPdf(current, request, {
+          destination,
+          render: renderPdf,
+          signal: controller.signal,
+          onProgress: (progress) => send("pdf:progress", progress),
+        }),
+      );
+    } finally {
+      pdfJob = null;
+    }
+  });
+  handle("pdf:cancel", () => pdfJob?.abort());
+  handle("pdf:read", (name) => readPdf(requireWorkspace(), name));
   handle("workspace:search", async (request) => {
     const current = requireWorkspace();
     searchJob?.controller.abort();
@@ -664,6 +721,7 @@ async function startApplication() {
     shell.openPath(path.join(app.getPath("userData"), "recovery")),
   );
   handle("app:close-confirmed", async () => {
+    pdfJob?.abort();
     state.window = {
       bounds: win.getNormalBounds(),
       maximized: win.isMaximized(),
@@ -698,6 +756,7 @@ async function startApplication() {
   function createWindow() {
     confirmedClose = false;
     win = new BrowserWindow({
+      show: !hiddenTestWindows,
       width: 1440,
       height: 950,
       ...(state.window?.bounds || {}),
@@ -713,9 +772,10 @@ async function startApplication() {
         sandbox: true,
         webSecurity: true,
         spellcheck: false,
+        ...(hiddenTestWindows ? { backgroundThrottling: false } : {}),
       },
     });
-    if (state.window?.maximized) win.maximize();
+    if (state.window?.maximized && !hiddenTestWindows) win.maximize();
     win.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
     win.webContents.on("will-navigate", (e) => e.preventDefault());
     win.webContents.on("will-attach-webview", (e) => e.preventDefault());
@@ -771,6 +831,14 @@ async function startApplication() {
         {
           label: "Save a Copy…",
           click: () => send("app:command", "save-copy"),
+        },
+        {
+          label: "Export to PDF…",
+          click: () => send("app:command", "export-pdf"),
+        },
+        {
+          label: "Export Folder to PDF…",
+          click: () => send("app:command", "export-folder-pdf"),
         },
         { type: "separator" },
         {

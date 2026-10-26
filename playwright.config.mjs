@@ -6,5 +6,6 @@ export default defineConfig({
   workers: 1,
   fullyParallel: false,
   reporter: [["list"], ["html", { open: "never" }]],
-  use: { trace: "retain-on-failure" },
+  // The Electron launch helper translates headless/--headed to hidden/visible windows.
+  use: { headless: true, trace: "retain-on-failure" },
 });

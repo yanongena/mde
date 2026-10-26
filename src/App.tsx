@@ -1,4 +1,12 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  lazy,
+  Suspense,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import {
   BookOpen,
   FolderOpen,
@@ -56,6 +64,7 @@ import { DocumentOutline } from "./components/DocumentOutline";
 import { selectionRoots } from "../electron/selection.mjs";
 import { isBrowserFile } from "../electron/browser-files.mjs";
 import { HistoryDialog } from "./components/HistoryDialog";
+import { PdfExportDialog } from "./components/PdfExportDialog";
 import { ConflictDiff } from "./components/ConflictDiff";
 import { MoveDestinationPicker } from "./components/MoveDestinationPicker";
 import { useExplorerDrag } from "./components/useExplorerDrag";
@@ -63,7 +72,13 @@ import { movePath, moveProblem } from "./lib/explorer-move";
 import { quickFiles, parseFileQuery, lineOffset } from "./lib/quick-open";
 import { ImagePreview } from "./components/ImagePreview";
 import { HtmlPreview } from "./components/HtmlPreview";
-import { documentMode, previewType, supportsVisualMode } from "./lib/document-mode";
+import {
+  documentMode,
+  previewType,
+  supportsVisualMode,
+  isPDF,
+  isReadOnlyPreview,
+} from "./lib/document-mode";
 import { TerminalView } from "./components/TerminalPanel";
 import {
   basename,
@@ -84,6 +99,8 @@ import type {
   SearchMatch,
   SpellcheckInfo,
 } from "./types";
+
+const PdfPreview = lazy(() => import("./components/PdfPreview"));
 
 type Choice = {
   id: string;
@@ -151,6 +168,8 @@ function FileIcon({
     <FileText size={16} className="markdown-icon" />
   ) : isImage(path) ? (
     <ImageIcon size={16} className="image-icon" />
+  ) : isPDF(path) ? (
+    <FileText size={16} className="pdf-icon" />
   ) : (
     <FileCode2 size={16} className="code-icon" />
   );
@@ -229,6 +248,11 @@ export default function App() {
     [showOutline, setShowOutline] = useState(false);
   const [dialog, setDialog] = useState<DialogSpec | null>(null),
     [dialogInput, setDialogInput] = useState("");
+  const [pdfSource, setPdfSource] = useState<{
+    path: string;
+    directory: boolean;
+    label: string;
+  } | null>(null);
   const [message, setMessage] = useState<{
       text: string;
       error: boolean;
@@ -334,7 +358,7 @@ export default function App() {
   }
   async function saveAs(path: string, copy: boolean) {
     const tab = tabsRef.current.find((tab) => tab.path === path);
-    if (!tab || isImage(path)) return;
+    if (!tab || isReadOnlyPreview(path)) return;
     const savedPosition = capturePosition(path);
     const dot = path.lastIndexOf("."),
       suggested =
@@ -447,6 +471,7 @@ export default function App() {
   };
 
   async function restore(opened: OpenedWorkspace) {
+    setPdfSource(null);
     navigationToken.current++;
     setSplit(null);
     setHistoryPath("");
@@ -468,8 +493,16 @@ export default function App() {
     const restored: Tab[] = [];
     for (const saved of opened.session?.tabs || []) {
       try {
-        if (isImage(saved.path)) {
-          restored.push({ ...saved, dirty: false, version: 0 });
+        if (isReadOnlyPreview(saved.path)) {
+          restored.push({
+            ...saved,
+            text: "",
+            baseline: "",
+            dirty: false,
+            conflict: undefined,
+            mode: "source",
+            version: 0,
+          });
           continue;
         }
         const disk = await window.margin.read(saved.path);
@@ -682,7 +715,7 @@ export default function App() {
     const current = tabsRef.current;
     const updates = await Promise.all(
       current.map(async (tab) => {
-        if (isImage(tab.path)) return null;
+        if (isReadOnlyPreview(tab.path)) return null;
         try {
           const disk = await window.margin.read(tab.path);
           if (disk.revision === tab.revision) return null;
@@ -727,6 +760,17 @@ export default function App() {
           return;
         }
         if (busyRef.current) return;
+        const pdfPositions = new Map(
+          tabsRef.current
+            .filter((tab) => isPDF(tab.path) && paths.includes(tab.path))
+            .map((tab) => [tab.path, capturePosition(tab.path)]),
+        );
+        if (pdfPositions.size)
+          changeTabs((previous) => previous.map((tab) =>
+            pdfPositions.has(tab.path)
+              ? { ...tab, position: pdfPositions.get(tab.path), version: tab.version + 1 }
+              : tab,
+          ));
         void refreshTree().catch(fail);
         void reloadTabs().catch(fail);
       }),
@@ -752,7 +796,7 @@ export default function App() {
     try {
       let tab = tabsRef.current.find((tab) => tab.path === name);
       if (!tab) {
-        if (isImage(name))
+        if (isReadOnlyPreview(name))
           tab = {
             path: name,
             text: "",
@@ -913,7 +957,7 @@ export default function App() {
     setSplit({ left, right });
   }
   async function showHistory(name: string) {
-    if (isImage(name)) return;
+    if (isReadOnlyPreview(name)) return;
     if (await openFile(name)) setHistoryPath(name);
   }
   async function goHistory(direction: -1 | 1) {
@@ -1231,6 +1275,18 @@ export default function App() {
       fail(error);
     }
   }
+  function showPdfExport(path: string, directory = false) {
+    if (pdfSource) return;
+    if (!rootRef.current) return;
+    if (!directory && !isMarkdown(path)) {
+      notify(
+        "Choose a Markdown file to export, or use Export Folder to PDF.",
+        true,
+      );
+      return;
+    }
+    setPdfSource({ path, directory, label: path || rootRef.current });
+  }
   function explorerMenu(
     path: string,
     x: number,
@@ -1247,6 +1303,12 @@ export default function App() {
       y,
       restoreFocus: () => target.isConnected && target.focus(),
       items: [
+        ...(!path || entry?.directory || isMarkdown(path)
+          ? [{
+              label: "Export to PDF…",
+              run: () => showPdfExport(path, !path || !!entry?.directory),
+            }]
+          : []),
         ...(entry && !entry.directory && isBrowserFile(path)
           ? [
               {
@@ -1323,25 +1385,28 @@ export default function App() {
         { label: "Open beside current", run: () => openBeside(path) },
         {
           label: "Local version history",
-          disabled: isImage(path),
+          disabled: isReadOnlyPreview(path),
           run: () => showHistory(path),
         },
         {
           label: "Save",
           shortcut: `${keyboard}+S`,
-          disabled: !tab?.dirty || isImage(path),
+          disabled: !tab?.dirty || isReadOnlyPreview(path),
           run: () => saveTab(path),
         },
         {
           label: "Save as…",
-          disabled: isImage(path),
+          disabled: isReadOnlyPreview(path),
           run: () => saveAs(path, false),
         },
         {
           label: "Save a copy…",
-          disabled: isImage(path),
+          disabled: isReadOnlyPreview(path),
           run: () => saveAs(path, true),
         },
+        ...(isMarkdown(path)
+          ? [{ label: "Export to PDF…", run: () => showPdfExport(path) }]
+          : []),
         {
           label: tab?.pinned ? "Unpin tab" : "Pin tab",
           run: () => pinTab(path),
@@ -1835,6 +1900,7 @@ export default function App() {
     findInDocument,
     showWorkspaceSearch,
     saveAs,
+    showPdfExport,
   });
   actionsRef.current = {
     requestClose,
@@ -1850,6 +1916,7 @@ export default function App() {
     findInDocument,
     showWorkspaceSearch,
     saveAs,
+    showPdfExport,
   };
   useEffect(
     () => window.margin.onClose(() => void actionsRef.current.requestClose()),
@@ -1858,6 +1925,10 @@ export default function App() {
   useEffect(
     () =>
       window.margin.onCommand((command) => {
+        if (command === "export-pdf")
+          actionsRef.current.showPdfExport(activeRef.current);
+        if (command === "export-folder-pdf")
+          actionsRef.current.showPdfExport("", true);
         if (command === "save-as")
           void actionsRef.current.saveAs(activeRef.current, false);
         if (command === "save-copy")
@@ -2019,12 +2090,18 @@ export default function App() {
   const current = tabs.find((t) => t.path === active);
   const keyboard = platform === "darwin" ? "⌘" : "Ctrl";
   const commands = [
+    ...(current && isMarkdown(current.path)
+      ? [{ name: "Export to PDF…", run: () => showPdfExport(current.path) }]
+      : []),
+    ...(root
+      ? [{ name: "Export folder to PDF…", run: () => showPdfExport("", true) }]
+      : []),
     {
       name: "Search workspace contents",
       shortcut: `${keyboard}+Shift+F`,
       run: showWorkspaceSearch,
     },
-    ...(current && !isImage(current.path)
+    ...(current && !isReadOnlyPreview(current.path)
       ? [
           { name: "Save as…", run: () => saveAs(current.path, false) },
           { name: "Save a copy…", run: () => saveAs(current.path, true) },
@@ -2035,6 +2112,9 @@ export default function App() {
           },
           { name: "Replace in document", run: () => findInDocument(true) },
         ]
+      : []),
+    ...(current && isPDF(current.path)
+      ? [{ name: "Find in PDF", shortcut: `${keyboard}+F`, run: () => findInDocument() }]
       : []),
     ...(closedTabs.current.length
       ? [
@@ -2081,10 +2161,10 @@ export default function App() {
             name: split ? "Close split view" : "Split editor",
             run: () => (split ? setSplit(null) : openBeside()),
           },
-          {
+          ...(!isReadOnlyPreview(current.path) ? [{
             name: "Local version history",
             run: () => showHistory(current.path),
-          },
+          }] : []),
         ]
       : []),
     ...(current && current.mode === "source" && supportsFormatting(current.path)
@@ -2536,6 +2616,15 @@ export default function App() {
                         : "")
                     }
                     data-explorer-drop="root"
+                    onContextMenu={(event) => {
+                      event.preventDefault();
+                      explorerMenu(
+                        "",
+                        event.clientX,
+                        event.clientY,
+                        event.currentTarget,
+                      );
+                    }}
                     onDragOver={explorerDrag.over}
                     onDrop={explorerDrag.drop}
                     onDragLeave={explorerDrag.leave}
@@ -3038,7 +3127,9 @@ export default function App() {
             </div>
             {current && (
               <div className="document-actions">
-                {current.dirty ? (
+                {isReadOnlyPreview(current.path) ? (
+                  <span className="save-state">Read-only</span>
+                ) : current.dirty ? (
                   <span className="save-state">Unsaved</span>
                 ) : (
                   <span className="save-state">
@@ -3075,6 +3166,7 @@ export default function App() {
                 <button
                   className="icon-button small"
                   aria-label="Save file"
+                  disabled={isReadOnlyPreview(current.path)}
                   data-tooltip={`${keyboard}+S`}
                   onClick={() => void saveTab(current.path)}
                 >
@@ -3101,7 +3193,7 @@ export default function App() {
                 <Columns2 />
               </button>
             )}
-            {current && !isImage(current.path) && (
+            {current && !isReadOnlyPreview(current.path) && (
               <button
                 className="icon-button"
                 aria-label="Local version history"
@@ -3117,6 +3209,7 @@ export default function App() {
                 aria-label="Show outline"
                 aria-expanded={showOutline}
                 aria-controls="document-outline"
+                disabled={!!current && isPDF(current.path)}
                 data-tooltip="Document outline"
                 onClick={() => setShowOutline(!showOutline)}
               >
@@ -3211,7 +3304,16 @@ export default function App() {
                     </button>
                   </div>
                 )}
-                {isImage(tab.path) ? (
+                {isPDF(tab.path) ? (
+                  <Suspense fallback={<div className="pdf-notice" role="status">Loading PDF viewer…</div>}>
+                    <PdfPreview
+                      key={root + ":" + tab.path}
+                      path={tab.path}
+                      position={positions.current.get(tab.path) || tab.position}
+                      visible={active === tab.path || split?.left === tab.path || split?.right === tab.path}
+                    />
+                  </Suspense>
+                ) : isImage(tab.path) ? (
                   <ImagePreview path={tab.path} />
                 ) : previewType(tab.path) && tab.mode === "visual" ? (
                   <HtmlPreview
@@ -3328,7 +3430,7 @@ export default function App() {
                 </div>
               </div>
             )}
-            {showOutline && current && !isImage(current.path) && (
+            {showOutline && current && !isReadOnlyPreview(current.path) && (
               <DocumentOutline
                 path={current.path}
                 text={current.text}
@@ -3470,14 +3572,18 @@ export default function App() {
         <span className="grow" />
         {current && (
           <>
-            <span>
-              {current.text.trim()
-                ? current.text.trim().split(/\s+/).length
-                : 0}{" "}
-              words
-            </span>
-            <span>UTF-8</span>
-            <span>{current.text.includes("\r\n") ? "CRLF" : "LF"}</span>
+            {!isPDF(current.path) && (
+              <>
+                <span>
+                  {current.text.trim()
+                    ? current.text.trim().split(/\s+/).length
+                    : 0}{" "}
+                  words
+                </span>
+                <span>UTF-8</span>
+                <span>{current.text.includes("\r\n") ? "CRLF" : "LF"}</span>
+              </>
+            )}
             <span>
               {isMarkdown(current.path)
                 ? "Markdown"
@@ -4082,6 +4188,15 @@ export default function App() {
             </div>
           </div>
         </div>
+      )}
+      {pdfSource && (
+        <PdfExportDialog
+          {...pdfSource}
+          overlays={() => tabsRef.current
+            .filter((tab) => isMarkdown(tab.path))
+            .map((tab) => ({ path: tab.path, text: tab.text }))}
+          onClose={() => setPdfSource(null)}
+        />
       )}
       {dialog && (
         <div className="modal-scrim dialog-scrim">

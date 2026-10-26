@@ -19,6 +19,7 @@ export interface Tab extends Document {
   pinned?: boolean;
 }
 export interface EditorPosition {
+  pdf?: { page: number; scale: string };
   mode: "visual" | "source";
   anchor: number;
   head: number;
@@ -118,6 +119,22 @@ export interface TerminalInfo {
   cwd?: string;
 }
 export interface MarginAPI {
+  pdfRead(path: string): Promise<Uint8Array>;
+  pdfPlan(request: PdfExportOptions): Promise<PdfExportPlan>;
+  pdfExport(
+    request: PdfExportOptions & { overlays: { path: string; text: string }[] },
+  ): Promise<PdfExportResult>;
+  pdfChooseDestination(
+    path: string,
+  ): Promise<{ id: string; path: string } | null>;
+  pdfCancel(): Promise<void>;
+  onPdfProgress(
+    callback: (progress: {
+      completed: number;
+      total: number;
+      path: string;
+    }) => void,
+  ): () => void;
   search(
     request: SearchOptions & {
       id: string;
@@ -224,6 +241,21 @@ export interface MarginAPI {
   ): () => void;
   onClose(callback: () => void): () => void;
   onCommand(callback: (command: string) => void): () => void;
+}
+export interface PdfExportOptions {
+  path: string;
+  mode: "combined" | "subfolders" | "files";
+  recursive: boolean;
+  destination?: string;
+}
+export interface PdfExportPlan {
+  files: number;
+  outputs: { path: string; sources: string[] }[];
+}
+export interface PdfExportResult {
+  paths: string[];
+  failed: { path: string; message: string }[];
+  cancelled: boolean;
 }
 declare global {
   interface Window {

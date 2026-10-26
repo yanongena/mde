@@ -4,14 +4,36 @@
 
 ```sh
 npm ci
-npm run build
-npm test
-npm run test:e2e
+npm run check                 # Build + all Node tests; no application windows
+npm run test:e2e:smoke        # Three core Electron workflows, hidden
+npm run test:e2e -- --grep 'PDF' # Only workflows for the changed feature, hidden
+npm run check:full            # Explicit full regression: build + Node + all Electron
+npm run test:e2e:headed -- --grep 'PDF' # Visible windows for interactive debugging
 ```
 
-`npm run check` runs the last three commands. There are 54 Node regression/integration tests and 59 Electron workflow tests. Tests use fresh temporary workspace folders and fresh application-data directories. They never operate on the user's ordinary notes. The E2E clipboard tests change the system clipboard. The native image-picker dialog, file-manager reveal, external link launches and HTTPS fixture responses are substituted where needed; clipboard operations, attachment writes, editor changes and PTY execution are real. The other workflow tests drive real Electron controls through Playwright.
+`npm run check` is the normal broad local check. It deliberately excludes Electron workflows. `npm run check:full` preserves the complete regression check for releases and broad changes. `npm run test:e2e` still runs every Electron workflow when explicitly requested; add `--grep` to select a feature. Use `npm run test:e2e -- --list` to inspect available workflows without launching the application. Build before running source Electron tests so they use the current renderer.
 
-`npm test` includes a real PTY shell test. It writes commands, verifies computed output and shell state, resizes the terminal and checks process termination. `npm run test:e2e` launches visible application windows. Allow it to finish before using the test application's controls. It uses Electron's debugging transport rather than coordinate scripts. Browser downloads are unnecessary: the Electron package supplies Chromium.
+Tests use fresh temporary workspace folders and fresh application-data directories. They never operate on the user's ordinary notes. The E2E clipboard tests change the system clipboard. The native image-picker dialog, file-manager reveal, external link launches and HTTPS fixture responses are substituted where needed; clipboard operations, attachment writes, editor changes and PTY execution are real. The other workflow tests drive real Electron controls through Playwright.
+
+`npm test` includes a real PTY shell test. It writes commands, verifies computed output and shell state, resizes the terminal and checks process termination, without opening a terminal window.
+
+## Choosing tests during development
+
+- For a small logic change, run the relevant Node files directly, for example `node --test tests/pdf-export.test.mjs tests/pdf-files.test.mjs`. Include adjacent behavior when shared code changes.
+- For production TypeScript, renderer, asset, or Electron/renderer integration changes, also run `npm run build`. Use `npm run check` when a broader windowless check is useful.
+- For UI changes, add only the affected Electron workflows with `--grep`. For example, PDF changes use `--grep 'PDF'`; outline changes use `--grep 'document outline|P2 QoL outline'`; moving notes also needs reference, session, and split-pane coverage where affected.
+- For shared UI changes, `npm run test:e2e:smoke` selects three existing workflows tagged `@smoke`: visual authoring/serialization, code editing/search/external changes, and autosave/draft recovery across restart. Add targeted tests for the changed behavior. The smoke set is a cross-feature check, not complete coverage.
+- Run `npm run check:full` before a release or when broad changes cannot reasonably be covered by a targeted selection. Packaged-application verification remains a separate release check. Do not rebuild installers or run the packaged suite after every small source change.
+
+## Hidden Electron windows
+
+Electron workflows use hidden windows by default, including restarts. The launch helper maps Playwright's `headless` setting to `MARGIN_TEST_HIDDEN=1`; this is an application test mode, not Chromium's headless browser mode. Windows start with `show: false`, continue rendering without background throttling, and omit the macOS Dock icon. Every launch asserts that window visibility matches the requested mode. Normal application launches retain their usual visible windows.
+
+Use `npm run test:e2e:headed -- --grep '<feature>'` (or `npm run test:e2e -- --headed --grep '<feature>'`) when you specifically need visible OS behavior or interactive debugging. Do not silently switch failed hidden tests to visible mode. Hidden tests still exercise real rendered controls, keyboard input, saved files, and existing clipboard/native integrations. They do not establish actual OS foreground-focus behavior.
+
+The suite uses Electron's debugging transport rather than coordinate scripts. Browser downloads are unnecessary: the Electron package supplies Chromium. Screenshots can still be captured from hidden rendered windows; Playwright's HTML report never opens automatically. These defaults also apply to packaged applications rebuilt with the hidden-window support; older executables must be rebuilt or explicitly tested with `--headed`.
+
+Verification on 26 October 2026 (macOS, source application): `npm run check` passed the production build and all 79 Node tests. All three hidden smoke workflows passed in 9.3 seconds. Six additional hidden workflows passed in 13.7 seconds, covering the development server, PDF viewing/search and restart restoration, real PTYs/layout restoration, close prompts/process cleanup, image zoom/resize, and visual context menus with real clipboard operations. Launch assertions checked hidden windows on every restart. The complete Electron suite and packaged applications were not rerun for this strategy change.
 
 ## Coverage
 

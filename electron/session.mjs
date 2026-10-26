@@ -7,6 +7,17 @@ export function savedPosition(value) {
   )
     return undefined;
   const result = { mode: value.mode, signature: value.signature };
+  if (
+    value.pdf &&
+    Number.isInteger(value.pdf.page) &&
+    value.pdf.page >= 1 &&
+    value.pdf.page <= 1e7 &&
+    (["page-width", "page-fit"].includes(value.pdf.scale) ||
+      (Number.isFinite(Number(value.pdf.scale)) &&
+        Number(value.pdf.scale) >= 0.25 &&
+        Number(value.pdf.scale) <= 4))
+  )
+    result.pdf = { page: value.pdf.page, scale: String(value.pdf.scale) };
   for (const key of [
     "anchor",
     "head",
