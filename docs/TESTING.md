@@ -37,6 +37,23 @@ Verification on 26 October 2026 (macOS, source application): `npm run check` pas
 
 ## Coverage
 
+Live-preview divider follow-up (28 October 2026): `npm run build` passed. Eight hidden workflows were verified using `npm run test:e2e -- --grep 'Teaching live preview divider|Teaching live HTML|Teaching live PHP|P3 QoL split|@smoke'`, with the divider workflow rerun after correcting its test locators to use the new window after restart. The divider test exercises actual mouse dragging across the preview without reloading its iframe, keyboard steps/bounds, double-click reset, persisted workspace ratios, resizing beside a pinned assignment, outline placement and closing the preview. The other seven cover existing HTML/PHP previews, both shared split workflows and all three smoke workflows. Packaged applications were not rebuilt.
+
+Presentation theme follow-up (28 October 2026): presentation now defaults to **Follow workspace theme** for both application chrome and source syntax colors. A one-time migration changes the previous persisted light default to follow the workspace; subsequent explicit light/dark overrides survive restart. `npm run build` passed, followed by all seven hidden workflows selected with `npm run test:e2e -- --grep 'Teaching presentation|UX clarity preferences|UX clarity readable|@smoke'`. Coverage includes following live theme changes, migration, override persistence, ordinary-theme restoration, preference behavior, contrast and the three shared smoke workflows. No installers were rebuilt.
+
+- The four `Teaching` Electron workflows cover the separate presentation font/theme profile, F8 and Escape, normal-setting restoration and restart; a pinned Markdown assignment with navigation from either pane, code-tab closure, moves and restart; a pinned PDF alongside live unsaved HTML/CSS, script isolation and preview restoration while CSS is active; and explicit PHP start/stop, unsaved includes, syntax errors and recovery without saving the originals.
+- `php-preview.test.mjs` uses real PHP when installed to check rendered output, unsaved project overlays, includes, PHTML execution, original-file preservation, workspace changes, process termination, temporary-copy removal and prompt cancellation of running and queued requests. Filesystem validation and copy-size limits run even without PHP. These tests exclude symlinks and reject escaped paths.
+
+Teaching verification on 28 October 2026 (macOS source): `npm run check` passed the production build and all **88 Node tests**, with PHP installed and no skipped tests. The following hidden Electron checks passed:
+
+```sh
+npm run test:e2e -- --grep 'Teaching |HTML visual mode|Markdown visual preview|SVG visual mode|P3 QoL split|PDF viewer|UX clarity|compact editor|Compare files' # 19 workflows
+npm run test:e2e:smoke # 3 workflows
+npm run test:e2e -- --grep 'native close prompts|PowerShell PTYs' # 2 workflows
+```
+
+This selects the affected previews, layouts, preferences and keyboard behavior, the three shared editor/recovery smoke workflows, and adjacent process cleanup. The Explorer selection test now waits for its animation-frame focus change before pressing Space; without that wait, the next key could target the previous row. Presentation screenshots and the PDF/code/result layout were visually reviewed. The full Electron regression suite, packaged applications and installers were not rebuilt or verified for this update.
+
 - `markdown.test.mjs` verifies PHP/HTML code examples (fenced, indented, nested and inline), angle-bracket link destinations, reference definitions, protected-document mode selection, sanitized previews, relative images and heading source offsets. The `Markdown visual preview` Electron workflow covers editable fenced examples, read-only previews of unsaved protected Markdown, reference/fragment links, outline navigation, find in Source, mode restoration after restart and exact BOM/CRLF source preservation. Protected documents still open in Source by default; Visual now provides a read-only preview.
 
   macOS source verification on 26 October 2026: `npm run build` and `npm test` passed (84 Node tests). `npm run test:e2e -- --grep 'Markdown visual preview|renderer isolation|P3 section menus support protected|HTML visual mode|@smoke'` passed all eight hidden workflows. A temporary copy of the reported `inventaris.md` also rendered in a hidden Electron window with all 100 code blocks and the literal PHP/HTML example; both the copy and original retained their exact bytes. The full Electron suite and packaged applications were not run.

@@ -22,6 +22,13 @@ export const preferenceCategories: {
     ],
   },
   {
+    id: "teaching",
+    title: "Teaching & presentation",
+    keywords:
+      "teaching lesson projector beamer presentation font size theme F8 classroom",
+    keys: ["presentationFontSize", "presentationTheme"],
+  },
+  {
     id: "spelling",
     title: "Spelling",
     keywords:

@@ -30,6 +30,8 @@ import { randomUUID } from "node:crypto";
 import { planPdfExport, exportPdf } from "./pdf-export.mjs";
 import { renderPdf } from "./pdf-window.mjs";
 import { readPdf } from "./pdf-files.mjs";
+import { PhpPreview } from "./php-preview.mjs";
+const phpPreview = new PhpPreview();
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const hiddenTestWindows = process.env.MARGIN_TEST_HIDDEN === "1";
@@ -66,6 +68,9 @@ const defaults = {
   sidebarVisible: true,
   terminalVisible: false,
   focusMode: false,
+  presentationMode: false,
+  presentationFontSize: 24,
+  presentationTheme: "inherit",
 };
 let history;
 let win,
@@ -112,6 +117,7 @@ async function openWorkspace(root) {
   await candidate.resolve();
   candidate.history = history;
   const entries = await candidate.tree();
+  await phpPreview.stop();
   await watcher?.close();
   clearTimeout(watcherTimer);
   await terminals.closeAll();
@@ -180,6 +186,13 @@ async function startApplication() {
     startupError = `Settings could not be read. Their original contents and recovery drafts were preserved at ${backup}.`;
   }
   state.settings = { ...defaults, ...state.settings };
+  // The original presentation default was persisted as light. Migrate it once,
+  // so existing dark workspaces also follow their ordinary theme by default.
+  if (state.presentationThemeVersion !== 1) {
+    if (state.settings.presentationTheme === "light")
+      state.settings.presentationTheme = "inherit";
+    state.presentationThemeVersion = 1;
+  }
   transactions = new Transactions(
     path.join(app.getPath("userData"), "recovery"),
   );
@@ -231,6 +244,9 @@ async function startApplication() {
   handle("app:check-spelling", (words, revision) =>
     spellcheck.check(words, revision),
   );
+
+  handle("preview:php", (request) => phpPreview.render(requireWorkspace(), request));
+  handle("preview:php-stop", () => phpPreview.stop());
 
   handle("app:bootstrap", async () => {
     let opened = null,
@@ -558,10 +574,12 @@ async function startApplication() {
         "attachmentMode",
         "attachmentFolder",
         "spellcheckLanguage",
+        "presentationTheme",
       ])
         if (typeof update[key] === "string") next[key] = update[key];
       for (const key of [
         "fontSize",
+        "presentationFontSize",
         "indentSize",
         "sidebarWidth",
         "terminalHeight",
@@ -577,6 +595,7 @@ async function startApplication() {
         "sidebarVisible",
         "terminalVisible",
         "focusMode",
+        "presentationMode",
         "formatOnOpen",
         "historyEnabled",
         "spellcheckEnabled",
@@ -591,11 +610,14 @@ async function startApplication() {
         next.ignored = [...new Set([".git", ...update.ignored])];
       if (
         !["light", "dark"].includes(next.theme) ||
+        !["inherit", "light", "dark"].includes(next.presentationTheme) ||
         !["off", "afterDelay", "onBlur"].includes(next.autosave) ||
         !["workspace", "nearby"].includes(next.attachmentMode)
       )
         throw new Error("Invalid preference.");
       if (
+        next.presentationFontSize < 18 ||
+        next.presentationFontSize > 36 ||
         next.fontSize < 10 ||
         next.fontSize > 28 ||
         ![2, 4, 8].includes(next.indentSize)
@@ -711,9 +733,12 @@ async function startApplication() {
         typeof saved.split.right === "string" &&
         saved.split.left !== saved.split.right &&
         tabs.some((tab) => tab.path === saved.split.left) &&
-        tabs.some((tab) => tab.path === saved.split.right)
-          ? { left: saved.split.left, right: saved.split.right }
+        (tabs.some((tab) => tab.path === saved.split.right) || (saved.split.assignment === true && saved.split.right === ""))
+          ? { left: saved.split.left, right: saved.split.right, assignment: saved.split.assignment === true }
           : null,
+      livePreview: saved.livePreview === true,
+      previewRatio: Number.isFinite(saved.previewRatio) ? Math.max(20, Math.min(80, saved.previewRatio)) : 50,
+      previewTarget: tabs.some((tab) => tab.path === saved.previewTarget && /\.(html?|php|phtml)$/i.test(tab.path)) ? saved.previewTarget : "",
       savedAt: new Date().toISOString(),
     };
     await saveState();
@@ -729,6 +754,7 @@ async function startApplication() {
     };
     await saveState();
     await stateQueue;
+    await phpPreview.stop();
     await terminals.closeAll();
     confirmedClose = true;
     win.close();
@@ -892,6 +918,7 @@ async function startApplication() {
     if (!win) createWindow();
   });
   app.on("window-all-closed", () => {
+    void phpPreview.stop();
     terminals.closeAll();
     if (process.platform !== "darwin") app.quit();
   });
@@ -899,6 +926,8 @@ async function startApplication() {
     if (confirmedClose) terminals.closeAll();
   });
   app.on("will-quit", () => {
+    phpPreview.kill();
+    void phpPreview.stop();
     watcher?.close();
     terminals.closeAll();
   });

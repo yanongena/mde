@@ -14,14 +14,23 @@ export function HtmlPreview({
   onLink,
   onActivate,
   position,
+  standalone = false,
+  overlays = [],
+  revision = 0,
 }: {
   path: string;
   text: string;
   onLink(href: string): void;
   onActivate(): void;
   position?: EditorPosition;
+  standalone?: boolean;
+  overlays?: { path: string; text: string }[];
+  revision?: number;
 }) {
-  const content = useMemo(() => htmlPreviewDocument(path, text), [path, text]);
+  const content = useMemo(
+    () => htmlPreviewDocument(path, text, overlays),
+    [path, text, overlays, revision],
+  );
   const format = previewType(path) ?? "HTML";
   const frame = useRef<HTMLIFrameElement>(null);
   const saved = useRef(position);
@@ -31,46 +40,51 @@ export function HtmlPreview({
   callbacks.current = { onLink, onActivate };
   useEffect(
     () =>
-      registerEditor(path, "visual", {
-        focus: () => frame.current?.focus(),
-        capture: () => {
-          const win = frame.current?.contentWindow;
-          const scroll = frame.current?.contentDocument?.scrollingElement;
-          return {
-            anchor: 0,
-            head: 0,
-            sourceAnchor: 0,
-            sourceHead: 0,
-            topSource: 0,
-            topOffset: 0,
-            ...saved.current,
-            mode: "visual",
-            scrollTop: win?.scrollY ?? 0,
-            scrollRatio:
-              (win?.scrollY ?? 0) /
-              Math.max(
-                1,
-                (scroll?.scrollHeight ?? 0) - (scroll?.clientHeight ?? 0),
-              ),
-            signature: textSignature(textRef.current),
-          };
-        },
-        restore: (position, focus = true) => {
-          saved.current = position;
-          if (position.mode === "visual")
-            frame.current?.contentWindow?.scrollTo(0, position.scrollTop);
-          if (focus) frame.current?.focus();
-        },
-        reveal: () => frame.current?.focus(),
-      }),
-    [path],
+      standalone
+        ? undefined
+        : registerEditor(path, "visual", {
+            focus: () => frame.current?.focus(),
+            capture: () => {
+              const win = frame.current?.contentWindow;
+              const scroll = frame.current?.contentDocument?.scrollingElement;
+              return {
+                anchor: 0,
+                head: 0,
+                sourceAnchor: 0,
+                sourceHead: 0,
+                topSource: 0,
+                topOffset: 0,
+                ...saved.current,
+                mode: "visual",
+                scrollTop: win?.scrollY ?? 0,
+                scrollRatio:
+                  (win?.scrollY ?? 0) /
+                  Math.max(
+                    1,
+                    (scroll?.scrollHeight ?? 0) - (scroll?.clientHeight ?? 0),
+                  ),
+                signature: textSignature(textRef.current),
+              };
+            },
+            restore: (position, focus = true) => {
+              saved.current = position;
+              if (position.mode === "visual")
+                frame.current?.contentWindow?.scrollTo(0, position.scrollTop);
+              if (focus) frame.current?.focus();
+            },
+            reveal: () => frame.current?.focus(),
+          }),
+    [path, standalone],
   );
   return (
     <div className="html-preview">
       <div className="html-preview-toolbar">
-        {format} preview · Edit in Source
+        {standalone
+          ? "Live preview · Current editor contents"
+          : `${format} preview · Edit in Source`}
       </div>
       <iframe
+        key={revision}
         ref={frame}
         title={`${format} preview for ${path}`}
         sandbox="allow-same-origin"
@@ -84,7 +98,14 @@ export function HtmlPreview({
               0,
               saved.current.scrollTop,
             );
-          doc.addEventListener("scroll", () => positionChanged(path, "scroll"));
+          doc.addEventListener("scroll", () => {
+            saved.current = {
+              ...saved.current,
+              mode: "visual",
+              scrollTop: doc.defaultView?.scrollY ?? 0,
+            } as EditorPosition;
+            if (!standalone) positionChanged(path, "scroll");
+          });
           doc.addEventListener("pointerdown", () =>
             callbacks.current.onActivate(),
           );
@@ -110,7 +131,8 @@ export function HtmlPreview({
           doc.addEventListener("keydown", (event) => {
             if (
               !(event.ctrlKey || event.metaKey || event.altKey) &&
-              event.key !== "Escape"
+              event.key !== "Escape" &&
+              event.key !== "F8"
             )
               return;
             const forwarded = new KeyboardEvent("keydown", {

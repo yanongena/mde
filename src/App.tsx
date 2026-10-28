@@ -48,6 +48,7 @@ import {
   ListTree,
   ListChecks,
   LoaderCircle,
+  Presentation,
 } from "lucide-react";
 import { MarkdownEditor } from "./editors/MarkdownEditor";
 import { CodeEditor } from "./editors/CodeEditor";
@@ -74,6 +75,8 @@ import { movePath, moveProblem } from "./lib/explorer-move";
 import { quickFiles, parseFileQuery, lineOffset } from "./lib/quick-open";
 import { ImagePreview } from "./components/ImagePreview";
 import { HtmlPreview } from "./components/HtmlPreview";
+import { LivePreview, supportsLivePreview } from "./components/LivePreview";
+import { PreviewDivider } from "./components/PreviewDivider";
 import { MarkdownPreview } from "./components/MarkdownPreview";
 import {
   documentMode,
@@ -101,6 +104,7 @@ import type {
   ClosedTab,
   SearchMatch,
   SpellcheckInfo,
+  EditorSplit,
 } from "./types";
 
 const PdfPreview = lazy(() => import("./components/PdfPreview"));
@@ -144,6 +148,9 @@ const initialSettings: Settings = {
   sidebarVisible: true,
   terminalVisible: false,
   focusMode: false,
+  presentationMode: false,
+  presentationFontSize: 24,
+  presentationTheme: "inherit",
 };
 const isInside = (name: string, parent: string) =>
   name === parent || name.startsWith(parent + "/");
@@ -176,16 +183,23 @@ function FileIcon({
 
 export default function App() {
   const { openMenu, closeMenu } = useContextMenu();
-  const [split, setSplitState] = useState<{
-    left: string;
-    right: string;
-  } | null>(null);
+  const [split, setSplitState] = useState<EditorSplit | null>(null);
   const splitRef = useRef(split);
   splitRef.current = split;
-  const setSplit = (next: { left: string; right: string } | null) => {
+  const setSplit = (next: EditorSplit | null) => {
     splitRef.current = next;
     setSplitState(next);
   };
+  const [livePreview, setLivePreview] = useState(false);
+  const livePreviewRef = useRef(livePreview);
+  livePreviewRef.current = livePreview;
+  const [previewTarget, setPreviewTarget] = useState("");
+  const previewTargetRef = useRef(previewTarget);
+  previewTargetRef.current = previewTarget;
+  const [previewRatio, setPreviewRatio] = useState(50);
+  const previewRatioRef = useRef(previewRatio);
+  previewRatioRef.current = previewRatio;
+  const [previewRevision, setPreviewRevision] = useState(0);
   const [historyPath, setHistoryPath] = useState("");
   const [comparison, setComparison] = useState<{
     left: string;
@@ -213,6 +227,10 @@ export default function App() {
   const [settings, setSettings] = useState(initialSettings),
     settingsRef = useRef(settings);
   settingsRef.current = settings;
+  const displayTheme =
+    settings.presentationMode && settings.presentationTheme !== "inherit"
+      ? settings.presentationTheme
+      : settings.theme;
   const [defaultSettings, setDefaultSettings] = useState(initialSettings);
   const [spellcheck, setSpellcheck] = useState<SpellcheckInfo | null>(null);
   const [root, setRoot] = useState(""),
@@ -223,9 +241,19 @@ export default function App() {
   const [tabs, setTabs] = useState<Tab[]>([]),
     tabsRef = useRef(tabs);
   tabsRef.current = tabs;
+  const previewOverlays = useMemo(
+    () =>
+      tabs
+        .filter((tab) => tab.dirty && !isReadOnlyPreview(tab.path))
+        .map(({ path, text }) => ({ path, text })),
+    [tabs],
+  );
   const [active, setActive] = useState(""),
     activeRef = useRef(active);
   activeRef.current = active;
+  useEffect(() => {
+    if (supportsLivePreview(active)) setPreviewTarget(active);
+  }, [active]);
   const [expanded, setExpanded] = useState<string[]>([]),
     expandedRef = useRef(expanded);
   expandedRef.current = expanded;
@@ -406,6 +434,7 @@ export default function App() {
       if (replace && splitRef.current) {
         const pair = splitRef.current;
         setSplit({
+          ...pair,
           left: pair.left === path ? doc.path : pair.left,
           right: pair.right === path ? doc.path : pair.right,
         });
@@ -507,6 +536,9 @@ export default function App() {
         closedTabs: closedTabs.current,
         recentFiles: recentFiles.current,
         split: splitRef.current,
+        livePreview: livePreviewRef.current,
+        previewTarget: previewTargetRef.current,
+        previewRatio: previewRatioRef.current,
       });
     }
   };
@@ -518,6 +550,11 @@ export default function App() {
     setPdfSource(null);
     navigationToken.current++;
     setSplit(null);
+    setLivePreview(opened.session?.livePreview === true);
+    setPreviewTarget(opened.session?.previewTarget || "");
+    setPreviewRatio(
+      Math.max(20, Math.min(80, opened.session?.previewRatio ?? 50)),
+    );
     setHistoryPath("");
     setSelectionMode(false);
     setSelection([]);
@@ -592,7 +629,8 @@ export default function App() {
       savedSplit.left !== savedSplit.right &&
       (nextActive === savedSplit.left || nextActive === savedSplit.right) &&
       restored.some((tab) => tab.path === savedSplit.left) &&
-      restored.some((tab) => tab.path === savedSplit.right)
+      (restored.some((tab) => tab.path === savedSplit.right) ||
+        (savedSplit.assignment && !savedSplit.right))
     )
       setSplit(savedSplit);
     navigation.current.reset(
@@ -637,8 +675,8 @@ export default function App() {
     return unsubscribe;
   }, []);
   useEffect(() => {
-    document.documentElement.dataset.theme = settings.theme;
-  }, [settings.theme]);
+    document.documentElement.dataset.theme = displayTheme;
+  }, [displayTheme]);
   useEffect(() => {
     if (message && !message.error) {
       const timer = setTimeout(() => setMessage(null), 5000);
@@ -649,7 +687,18 @@ export default function App() {
     if (!root || loading) return;
     const timer = setTimeout(() => void persist().catch(fail), 350);
     return () => clearTimeout(timer);
-  }, [tabs, active, expanded, root, loading, split, navigationRevision]);
+  }, [
+    tabs,
+    active,
+    expanded,
+    root,
+    loading,
+    split,
+    livePreview,
+    previewTarget,
+    previewRatio,
+    navigationRevision,
+  ]);
   useEffect(() => {
     let timer: ReturnType<typeof setTimeout>;
     const changed = (event: Event) => {
@@ -805,6 +854,7 @@ export default function App() {
           notify("File watcher: " + paths.error, true);
           return;
         }
+        setPreviewRevision((value) => value + 1);
         if (busyRef.current) return;
         const pdfPositions = new Map(
           tabsRef.current
@@ -861,7 +911,9 @@ export default function App() {
         else {
           const doc = await window.margin.read(name);
           if (token !== navigationToken.current) return false;
-          const protection = isMarkdown(name) ? visualProtection(doc.text) : null;
+          const protection = isMarkdown(name)
+            ? visualProtection(doc.text)
+            : null;
           tab = {
             ...doc,
             baseline: doc.text,
@@ -879,7 +931,14 @@ export default function App() {
             : [...previous, tab!],
         );
       }
-      const mode = documentMode(name, tab.text, target?.mode ?? tab.mode);
+      const mode = documentMode(
+        name,
+        tab.text,
+        target?.mode ??
+          (livePreviewRef.current && supportsLivePreview(name)
+            ? "source"
+            : tab.mode),
+      );
       if (target?.position) positions.current.set(name, target.position);
       const mounted =
         activeRef.current === name &&
@@ -902,7 +961,7 @@ export default function App() {
       const pair = splitRef.current;
       if (pair && pair.left !== name && pair.right !== name)
         setSplit(
-          activeRef.current === pair.right
+          pair.assignment || activeRef.current === pair.right
             ? { ...pair, right: name }
             : { ...pair, left: name },
         );
@@ -991,6 +1050,40 @@ export default function App() {
     editorInteraction.current++;
     setActive(name);
     activeRef.current = name;
+  }
+  function toggleAssignment() {
+    const pair = splitRef.current;
+    if (pair?.assignment) {
+      setSplit(null);
+      return;
+    }
+    const name = activeRef.current;
+    if (!isMarkdown(name) && !isPDF(name)) return;
+    capturePosition();
+    const right = pair
+      ? pair.left === name
+        ? pair.right
+        : pair.left
+      : tabsRef.current.find((tab) => tab.path !== name)?.path || "";
+    setSplit({ left: name, right, assignment: true });
+    if (right) {
+      setActive(right);
+      activeRef.current = right;
+    }
+  }
+  async function toggleLivePreview() {
+    if (livePreviewRef.current) {
+      setLivePreview(false);
+      return;
+    }
+    const name = activeRef.current;
+    if (!supportsLivePreview(name)) return;
+    if (
+      await openFile(name, undefined, { mode: "source", preserveText: true })
+    ) {
+      setPreviewTarget(name);
+      setLivePreview(true);
+    }
   }
   async function openBeside(name?: string) {
     const left = activeRef.current;
@@ -1129,13 +1222,21 @@ export default function App() {
         return false;
     }
     const pair = splitRef.current;
-    const other =
+    let other =
       pair?.left === name
         ? pair.right
         : pair?.right === name
           ? pair.left
           : undefined;
-    if (other) setSplit(null);
+    if (pair?.assignment && pair.right === name) {
+      const right =
+        tabsRef.current.find(
+          (entry) => entry.path !== name && entry.path !== pair.left,
+        )?.path || "";
+      setSplit({ ...pair, right });
+      other = right || pair.left;
+    } else if ((pair && pair.left === name) || (pair && pair.right === name))
+      setSplit(null);
     const index = tabsRef.current.findIndex((t) => t.path === name);
     if (tab) {
       closedTabs.current = [
@@ -1221,6 +1322,7 @@ export default function App() {
       [...positions.current].map(([path, position]) => [map(path), position]),
     );
     recentFiles.current = recentFiles.current.map(map);
+    setPreviewTarget((name) => map(name));
     closedTabs.current = closedTabs.current.map((tab) => ({
       ...tab,
       path: map(tab.path),
@@ -1235,6 +1337,7 @@ export default function App() {
     );
     if (splitRef.current)
       setSplit({
+        ...splitRef.current,
         left: map(splitRef.current.left),
         right: map(splitRef.current.right),
       });
@@ -1312,7 +1415,11 @@ export default function App() {
           splitRef.current &&
           (removed(splitRef.current.left) || removed(splitRef.current.right))
         )
-          setSplit(null);
+          setSplit(
+            splitRef.current.assignment && !removed(splitRef.current.left)
+              ? { ...splitRef.current, right: "" }
+              : null,
+          );
         positions.current = new Map(
           [...positions.current].filter(([path]) => !removed(path)),
         );
@@ -1715,6 +1822,7 @@ export default function App() {
           position,
         ]),
       );
+      setPreviewTarget((name) => mapped(name, from, target));
       recentFiles.current = recentFiles.current.map((path) =>
         mapped(path, from, target),
       );
@@ -1732,6 +1840,7 @@ export default function App() {
       );
       if (splitRef.current)
         setSplit({
+          ...splitRef.current,
           left: mapped(splitRef.current.left, from, target),
           right: mapped(splitRef.current.right, from, target),
         });
@@ -1797,7 +1906,12 @@ export default function App() {
           (isInside(splitRef.current.left, name) ||
             isInside(splitRef.current.right, name))
         )
-          setSplit(null);
+          setSplit(
+            splitRef.current.assignment &&
+              !isInside(splitRef.current.left, name)
+              ? { ...splitRef.current, right: "" }
+              : null,
+          );
         setSelection([]);
         recentFiles.current = recentFiles.current.filter(
           (path) => !isInside(path, name),
@@ -1904,6 +2018,12 @@ export default function App() {
     }
   }
   async function toggleMode(tab: Tab) {
+    if (
+      livePreviewRef.current &&
+      supportsLivePreview(tab.path) &&
+      tab.mode === "source"
+    )
+      setLivePreview(false);
     const savedPosition = capturePosition(tab.path);
     changeTabs((previous) =>
       previous.map((t) =>
@@ -2040,7 +2160,26 @@ export default function App() {
   );
   useEffect(() => {
     const keydown = (event: KeyboardEvent) => {
+      if (event.key === "F8" && !document.querySelector(".modal-scrim")) {
+        event.preventDefault();
+        void updateSettings({
+          presentationMode: !settingsRef.current.presentationMode,
+        });
+        return;
+      }
       if (event.key === "Escape") {
+        if (
+          settingsRef.current.presentationMode &&
+          !dialog &&
+          !showSettings &&
+          !palette &&
+          !document.querySelector(
+            '.modal-scrim, [role="menu"], .cm-panel, .cm-tooltip',
+          )
+        ) {
+          void updateSettings({ presentationMode: false });
+          return;
+        }
         if (dialog) answer(null);
         else {
           closeMenu();
@@ -2183,8 +2322,46 @@ export default function App() {
     window.addEventListener("pointerup", up);
   }
   const current = tabs.find((t) => t.path === active);
+  const previewTab = tabs.find(
+    (tab) => tab.path === previewTarget && supportsLivePreview(tab.path),
+  );
+  const previewVisible = livePreview && !!previewTab;
+  const presentation = settings.presentationMode;
+  const editorSettings = presentation
+    ? {
+        ...settings,
+        fontSize: settings.presentationFontSize,
+        theme: displayTheme,
+      }
+    : settings;
   const keyboard = platform === "darwin" ? "⌘" : "Ctrl";
   const commands = [
+    {
+      name: presentation
+        ? "Leave presentation mode"
+        : "Enter presentation mode",
+      shortcut: "F8",
+      run: () => updateSettings({ presentationMode: !presentation }),
+    },
+    ...(split?.assignment ||
+    (current && (isMarkdown(current.path) || isPDF(current.path)))
+      ? [
+          {
+            name: split?.assignment ? "Unpin assignment" : "Pin assignment",
+            run: () => toggleAssignment(),
+          },
+        ]
+      : []),
+    ...(livePreview || (current && supportsLivePreview(current.path))
+      ? [
+          {
+            name: livePreview
+              ? "Close live preview"
+              : "Show live preview beside code",
+            run: () => toggleLivePreview(),
+          },
+        ]
+      : []),
     ...(current && isMarkdown(current.path)
       ? [{ name: "Export to PDF…", run: () => showPdfExport(current.path) }]
       : []),
@@ -2538,7 +2715,11 @@ export default function App() {
     );
   return (
     <div
-      className={"application" + (settings.focusMode ? " focus-mode" : "")}
+      className={
+        "application" +
+        (settings.focusMode || presentation ? " focus-mode" : "") +
+        (presentation ? " presentation-mode" : "")
+      }
       ref={appRef}
       onFocusCapture={(event) => {
         // Toolbar, dialog and explorer focus takes precedence over a pending
@@ -2548,9 +2729,13 @@ export default function App() {
       }}
       style={
         {
-          "--reading-font-size": settings.readingFontSize + "px",
+          "--reading-font-size":
+            (presentation
+              ? settings.presentationFontSize
+              : settings.readingFontSize) + "px",
           "--reading-line-height": settings.readingLineHeight,
-          "--reading-width": settings.readingWidth + "px",
+          "--reading-width":
+            (presentation ? 1200 : settings.readingWidth) + "px",
         } as React.CSSProperties
       }
     >
@@ -2588,6 +2773,23 @@ export default function App() {
         </button>
         <div className="header-actions">
           <button
+            className="presentation-button"
+            aria-label={
+              presentation
+                ? "Leave presentation mode"
+                : "Enter presentation mode"
+            }
+            aria-pressed={presentation}
+            data-tooltip="Presentation mode (F8)"
+            onClick={() =>
+              void updateSettings({ presentationMode: !presentation })
+            }
+          >
+            <Presentation size={17} />
+            <span>{presentation ? "Leave presentation" : "Present"}</span>
+            <kbd>F8</kbd>
+          </button>
+          <button
             className="icon-button"
             aria-label="Toggle focus mode"
             data-tooltip="Focus mode"
@@ -2619,7 +2821,7 @@ export default function App() {
         </div>
       </header>
       <div className="workspace-body">
-        {!settings.focusMode && (
+        {!settings.focusMode && !presentation && (
           <nav className="activity-bar" aria-label="Workspace tools">
             <button
               className={
@@ -2699,7 +2901,7 @@ export default function App() {
             </div>
           </nav>
         )}
-        {settings.sidebarVisible && !settings.focusMode && (
+        {settings.sidebarVisible && !settings.focusMode && !presentation && (
           <>
             <aside className="sidebar" style={{ width: settings.sidebarWidth }}>
               {sidebarMode === "search" ? (
@@ -3172,7 +3374,9 @@ export default function App() {
                 });
               }}
             >
-              {(!settings.sidebarVisible || settings.focusMode) && (
+              {(!settings.sidebarVisible ||
+                settings.focusMode ||
+                presentation) && (
                 <button
                   className="icon-button"
                   aria-label="Show explorer"
@@ -3180,6 +3384,7 @@ export default function App() {
                     void updateSettings({
                       sidebarVisible: true,
                       focusMode: false,
+                      presentationMode: false,
                     })
                   }
                 >
@@ -3310,11 +3515,15 @@ export default function App() {
                       aria-pressed={current.mode === "visual"}
                       className={current.mode === "visual" ? "active" : ""}
                       onClick={() => {
-                        if (current.mode !== "visual") void toggleMode(current);
+                        if (current.mode !== "visual") {
+                          setLivePreview(false);
+                          void toggleMode(current);
+                        }
                       }}
                     >
                       {previewType(current.path) ||
-                      (isMarkdown(current.path) && visualProtection(current.text)) ? (
+                      (isMarkdown(current.path) &&
+                        visualProtection(current.text)) ? (
                         <Eye size={13} />
                       ) : (
                         <PenLine size={13} />
@@ -3343,6 +3552,42 @@ export default function App() {
                   <Save />
                 </button>
               </div>
+            )}
+            {(split?.assignment ||
+              (current &&
+                (isMarkdown(current.path) || isPDF(current.path)))) && (
+              <button
+                className="teaching-action"
+                aria-label={
+                  split?.assignment ? "Unpin assignment" : "Pin assignment"
+                }
+                aria-pressed={!!split?.assignment}
+                data-tooltip={
+                  split?.assignment
+                    ? "Unpin assignment"
+                    : "Keep this assignment on the left"
+                }
+                onClick={toggleAssignment}
+              >
+                <Pin size={14} />
+                <span>{split?.assignment ? "Unpin" : "Pin assignment"}</span>
+              </button>
+            )}
+            {(livePreview ||
+              (current && supportsLivePreview(current.path))) && (
+              <button
+                className="teaching-action"
+                aria-label={
+                  livePreview
+                    ? "Hide live preview"
+                    : "Show live preview beside code"
+                }
+                aria-pressed={livePreview}
+                onClick={() => void toggleLivePreview()}
+              >
+                <Eye size={14} />
+                <span>Preview</span>
+              </button>
             )}
             {current && (
               <button
@@ -3441,7 +3686,19 @@ export default function App() {
               </button>
             </div>
           )}
-          <div className={"editor-area" + (split ? " split" : "")}>
+          <div
+            className={
+              "editor-area" +
+              (split ? " split" : "") +
+              (previewVisible ? " with-preview" : "")
+            }
+            style={
+              {
+                "--preview-code-fr": `${((split ? 2.2 : 2) * previewRatio) / 100}fr`,
+                "--preview-result-fr": `${((split ? 2.2 : 2) * (100 - previewRatio)) / 100}fr`,
+              } as React.CSSProperties
+            }
+          >
             {tabs.map((tab) => (
               <section
                 key={tab.path + ":" + tab.version}
@@ -3486,7 +3743,12 @@ export default function App() {
                 {split &&
                   (split.left === tab.path || split.right === tab.path) && (
                     <div className="split-pane-title">
-                      <span data-tooltip={tab.path}>{tab.path}</span>
+                      <span data-tooltip={tab.path}>
+                        {split.assignment && split.left === tab.path
+                          ? "Pinned assignment · "
+                          : ""}
+                        {tab.path}
+                      </span>
                       <button
                         className="icon-button small"
                         aria-label={
@@ -3497,8 +3759,10 @@ export default function App() {
                         onClick={() => {
                           const other =
                             split.left === tab.path ? split.right : split.left;
-                          setSplit(null);
-                          void openFile(other);
+                          if (split.assignment && split.right === tab.path)
+                            setSplit({ ...split, right: "" });
+                          else setSplit(null);
+                          if (other) void openFile(other);
                         }}
                       >
                         <X size={12} />
@@ -3586,7 +3850,7 @@ export default function App() {
                     <CodeEditor
                       path={tab.path}
                       text={tab.text}
-                      settings={settings}
+                      settings={editorSettings}
                       active={active === tab.path}
                       visible={
                         active === tab.path ||
@@ -3665,23 +3929,50 @@ export default function App() {
                 </div>
               </div>
             )}
-            {showOutline && current && !isReadOnlyPreview(current.path) && (
-              <DocumentOutline
-                path={current.path}
-                text={current.text}
-                mode={current.mode}
-                onClose={() => setShowOutline(false)}
-                onNavigate={(item) => {
-                  void openFile(current.path, undefined, {
-                    range: { from: item.from, to: item.from },
-                    mode: previewType(current.path) ? "source" : current.mode,
-                    preserveText: previewType(current.path) !== null,
-                  });
-                }}
+            {split?.assignment && !split.right && (
+              <div className="assignment-placeholder">
+                Open a code file to work beside this assignment.
+              </div>
+            )}
+            {previewVisible && (
+              <PreviewDivider
+                ratio={previewRatio}
+                codePath={split?.right || active}
+                onChange={setPreviewRatio}
               />
             )}
+            {previewVisible && (
+              <LivePreview
+                key={root}
+                path={previewTab.path}
+                text={previewTab.text}
+                overlays={previewOverlays}
+                revision={previewRevision}
+                visible={previewVisible}
+                onLink={(href) => void followLink(previewTab.path, href)}
+                onClose={() => setLivePreview(false)}
+              />
+            )}
+            {showOutline &&
+              !presentation &&
+              current &&
+              !isReadOnlyPreview(current.path) && (
+                <DocumentOutline
+                  path={current.path}
+                  text={current.text}
+                  mode={current.mode}
+                  onClose={() => setShowOutline(false)}
+                  onNavigate={(item) => {
+                    void openFile(current.path, undefined, {
+                      range: { from: item.from, to: item.from },
+                      mode: previewType(current.path) ? "source" : current.mode,
+                      preserveText: previewType(current.path) !== null,
+                    });
+                  }}
+                />
+              )}
           </div>
-          {settings.terminalVisible && !settings.focusMode && (
+          {settings.terminalVisible && !settings.focusMode && !presentation && (
             <div
               className="resize-handle terminal-resize"
               role="separator"
@@ -3709,7 +4000,9 @@ export default function App() {
           <section
             className={
               "terminal-panel " +
-              (settings.terminalVisible && !settings.focusMode ? "visible" : "")
+              (settings.terminalVisible && !settings.focusMode && !presentation
+                ? "visible"
+                : "")
             }
             style={{ height: settings.terminalHeight }}
             aria-label="Integrated terminal"
@@ -3774,7 +4067,8 @@ export default function App() {
                   active={
                     terminalActive === info.id &&
                     settings.terminalVisible &&
-                    !settings.focusMode
+                    !settings.focusMode &&
+                    !presentation
                   }
                   theme={settings.theme}
                   onError={(text) => notify(text, true)}

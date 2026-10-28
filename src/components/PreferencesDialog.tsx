@@ -246,6 +246,49 @@ export function PreferencesDialog({
               </select>
             </label>
           </div>
+          <div className="settings-section" hidden={!visible.has("teaching")}>
+            <h3>Teaching &amp; presentation</h3>
+            <p>
+              Press F8 to toggle presentation mode. It follows your usual theme
+              unless you choose an override below. Your usual text sizes return
+              when you leave it. The current document layout stays in place.
+            </p>
+            <label>
+              Presentation font size
+              <select
+                aria-label="Presentation font size"
+                value={settings.presentationFontSize}
+                onChange={(event) =>
+                  void updateSettings({
+                    presentationFontSize: Number(event.target.value),
+                  })
+                }
+              >
+                {[18, 20, 22, 24, 28, 32, 36].map((size) => (
+                  <option key={size} value={size}>
+                    {size} px
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label>
+              Presentation theme
+              <select
+                aria-label="Presentation theme"
+                value={settings.presentationTheme}
+                onChange={(event) =>
+                  void updateSettings({
+                    presentationTheme: event.target
+                      .value as Settings["presentationTheme"],
+                  })
+                }
+              >
+                <option value="inherit">Follow workspace theme</option>
+                <option value="light">Daylight · light</option>
+                <option value="dark">Nightfall · dark</option>
+              </select>
+            </label>
+          </div>
           <div className="settings-section" hidden={!visible.has("spelling")}>
             <h3>Spelling</h3>
             <label>

@@ -1,5 +1,15 @@
 # Functionality report
 
+## Teaching update — 28 October 2026 (local source)
+
+Presentation mode uses F8, a separate persisted font profile, larger code/reading text, a stronger cursor and reduced workspace chrome. It follows the ordinary theme by default, with optional persisted light/dark overrides. The previous persisted light default is migrated once to follow the workspace. Leaving it restores ordinary preferences. A Markdown or PDF assignment can be pinned on the left; new file navigation uses the right pane regardless of which pane was focused. Pins follow app-initiated moves, survive code-tab closure and restore with the workspace.
+
+Live HTML/HTM and PHP/PHTML results appear beside the source, optionally as a third pane beside the assignment. Their divider supports dragging across the preview, keyboard resizing and double-click reset to equal widths; the bounded 20–80% ratio is remembered per workspace. Resizing code/result leaves the assignment width intact. HTML includes unsaved stylesheet buffers. The preview target is restored even when a CSS file is active. PHP starts explicitly using an installed CLI and a loopback server over a temporary project copy, including unsaved buffers and PHP includes. Stop interrupts active/queued requests; closing the preview, changing workspaces or normal application closure disposes the process and copy. PHP execution is not resumed after restarting.
+
+Results use the existing script-disabled HTML rendering, with no interactive form submissions or browser sessions. PHP executes with the user's normal account permissions. Copies respect workspace ignores and exclude symlinks; projects are limited to 10,000 files/64 MB, responses to 5 MB and requests to 10 seconds. Dependencies in ignored directories are not copied.
+
+Verified on macOS source: production build, all 88 Node tests (including four PHP preview tests using real PHP), all four new Teaching workflows, 15 adjacent preview/layout/UX workflows, three smoke workflows and two terminal/closure workflows. Presentation and three-pane screenshots were reviewed. See `docs/TESTING.md` for exact commands. Existing packaged applications and installers are unchanged. The historical reports below describe earlier versions.
+
 Verification date: 25 October 2026. Hosts: Windows 11 x64 (original verification) and macOS 27.0.1 arm64 (local Mac build).
 
 ## PDF export update — 26 October 2026

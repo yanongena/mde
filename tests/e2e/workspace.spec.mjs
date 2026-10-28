@@ -60,7 +60,7 @@ async function move(from, to) {
     page.getByRole("treeitem", { name: to, exact: true }),
   ).toBeVisible();
 }
-async function launch(devURL) {
+async function launch(devURL, presentation = false) {
   const env = {
     ...process.env,
     MARGIN_DATA_PATH: data,
@@ -83,7 +83,8 @@ async function launch(devURL) {
   )).toBe(!hiddenWindows);
   errors = [];
   page.on("pageerror", (error) => errors.push(error.message));
-  await expect(
+  if (presentation) await expect(page.locator(".application.presentation-mode")).toBeVisible();
+  else await expect(
     page.getByRole("treeitem", { name: "notes/welcome.md", exact: true }),
   ).toBeVisible();
 }
@@ -305,6 +306,254 @@ test("folder PDF export supports combined, subfolders, individual files and cust
   await expect(dialog.getByRole("status")).toContainText("Export complete. 4 PDFs saved.");
   for (const name of ["welcome.pdf", "other.pdf", "chapter/a.pdf", "chapter/deep/b.pdf"])
     expect((await fs.readFile(path.join(destination, name))).subarray(0, 5).toString()).toBe("%PDF-");
+  expect(errors).toEqual([]);
+});
+
+test("Teaching presentation follows the workspace theme by default and migrates the old light default", async () => {
+  await open("src/example.html");
+  await page.getByRole("button", { name: "Preferences", exact: true }).click();
+  await expect(page.getByLabel("Presentation theme", { exact: true })).toHaveValue("inherit");
+  await page.getByLabel(/^Color theme/).selectOption("dark");
+  await page.getByRole("button", { name: "Close preferences" }).click();
+  const editor = page.locator(".editor-pane.active .cm-editor");
+  const editorBackground = await editor.evaluate((element) => getComputedStyle(element).backgroundColor);
+  await page.keyboard.press("F8");
+  await expect(page.locator(".application")).toHaveClass(/presentation-mode/);
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
+  await expect(editor).toHaveCSS("background-color", editorBackground);
+  // Theme changes continue to apply while presentation mode is active.
+  await page.keyboard.press(shortcut + "+,");
+  await page.getByLabel(/^Color theme/).selectOption("light");
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
+  await page.getByLabel(/^Color theme/).selectOption("dark");
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
+  await page.getByRole("button", { name: "Close preferences" }).click();
+  await page.keyboard.press("Escape");
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
+  await expect.poll(async () => JSON.parse(await fs.readFile(path.join(data, "state.json"), "utf8")).sessions[root]?.active).toBe("src/example.html");
+  await app.evaluate(({ app }) => app.exit());
+  await app.close().catch(() => {});
+  const statePath = path.join(data, "state.json");
+  const previous = JSON.parse(await fs.readFile(statePath, "utf8"));
+  previous.settings.presentationTheme = "light";
+  delete previous.presentationThemeVersion;
+  await fs.writeFile(statePath, JSON.stringify(previous));
+  await launch();
+  await page.keyboard.press("F8");
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
+  // An explicitly chosen light override remains light after a later restart.
+  await page.keyboard.press(shortcut + "+,");
+  await expect(page.getByLabel("Presentation theme", { exact: true })).toHaveValue("inherit");
+  await page.getByLabel("Presentation theme", { exact: true }).selectOption("light");
+  await page.getByRole("button", { name: "Close preferences" }).click();
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
+  await expect.poll(async () => JSON.parse(await fs.readFile(statePath, "utf8")).settings.presentationMode).toBe(true);
+  await app.evaluate(({ app }) => app.exit());
+  await app.close().catch(() => {});
+  await launch(undefined, true);
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
+  await page.keyboard.press("Escape");
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
+  expect(errors).toEqual([]);
+});
+
+test("Teaching presentation uses a persistent lesson profile and restores the normal workspace", async () => {
+  await open("src/example.html");
+  await page.getByRole("button", { name: "Preferences", exact: true }).click();
+  await page.getByLabel("Presentation font size", { exact: true }).selectOption("28");
+  await page.getByLabel("Presentation theme", { exact: true }).selectOption("dark");
+  await page.getByRole("button", { name: "Close preferences" }).click();
+  const ordinary = JSON.parse(await fs.readFile(path.join(data, "state.json"), "utf8")).settings;
+  await page.keyboard.press("F8");
+  await expect(page.locator(".application")).toHaveClass(/presentation-mode/);
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
+  await expect(page.locator(".editor-pane.active .code-editor")).toHaveCSS("font-size", "28px");
+  await expect(page.locator(".sidebar")).toHaveCount(0);
+  await expect(page.locator(".status-bar")).toBeHidden();
+  await expect.poll(async () => { const saved = JSON.parse(await fs.readFile(path.join(data, "state.json"), "utf8")); return saved.settings.presentationMode && saved.sessions[root]?.active === "src/example.html"; }).toBe(true);
+  await page.screenshot({ path: "test-results/teaching-presentation.png" });
+  await app.evaluate(({ app }) => app.exit());
+  await app.close().catch(() => {});
+  await launch(undefined, true);
+  await expect(page.locator(".application")).toHaveClass(/presentation-mode/);
+  await expect(page.locator(".editor-pane.active .code-editor")).toHaveCSS("font-size", "28px");
+  await page.keyboard.press("Escape");
+  await expect(page.locator(".application")).not.toHaveClass(/presentation-mode/);
+  await expect(page.locator("html")).toHaveAttribute("data-theme", ordinary.theme);
+  await expect(page.locator(".editor-pane.active .code-editor")).toHaveCSS("font-size", ordinary.fontSize + "px");
+  await expect(page.locator(".status-bar")).toBeVisible();
+  expect(errors).toEqual([]);
+});
+
+test("Teaching pinned assignment survives focused navigation, closing code tabs, moves and restart", async () => {
+  await open("notes/welcome.md");
+  await page.getByRole("button", { name: "Pin assignment", exact: true }).click();
+  const assignment = () => page.locator('.editor-pane[data-path="notes/welcome.md"]');
+  await expect(assignment().locator(".split-pane-title")).toContainText("Pinned assignment");
+  await expect(page.locator(".assignment-placeholder")).toBeVisible();
+  await open("src/example.php");
+  await assignment().locator("h1").click();
+  await open("src/example.html");
+  await expect(assignment()).toBeVisible();
+  await expect(page.locator('.editor-pane[data-path="src/example.html"]')).toHaveCSS("grid-column-start", "2");
+  await page.keyboard.press(shortcut + "+w");
+  await expect(assignment()).toBeVisible();
+  await expect(page.getByRole("button", { name: "Unpin assignment", exact: true })).toBeVisible();
+  await open("src/example.php");
+  await expect.poll(async () => JSON.parse(await fs.readFile(path.join(data, "state.json"), "utf8")).sessions[root]?.split?.assignment).toBe(true);
+  await app.evaluate(({ app }) => app.exit());
+  await app.close().catch(() => {});
+  await launch();
+  await expect(assignment()).toBeVisible();
+  await expect(page.locator('.editor-pane[data-path="src/example.php"]')).toBeVisible();
+  await move("notes/welcome.md", "notes/assignment.md");
+  await expect(page.locator('.editor-pane[data-path="notes/assignment.md"] .split-pane-title')).toContainText("Pinned assignment");
+  await open("src/example.html");
+  await expect(page.locator('.editor-pane[data-path="notes/assignment.md"]')).toBeVisible();
+  await page.getByRole("button", { name: "Unpin assignment", exact: true }).click();
+  await expect(page.locator(".editor-area")).not.toHaveClass(/split/);
+  expect(errors).toEqual([]);
+});
+
+test("Teaching live HTML preview follows unsaved HTML and CSS beside a PDF assignment and restores after restart", async () => {
+  const exported = await page.evaluate(() => window.margin.pdfExport({ path: "notes/welcome.md", mode: "combined", recursive: true, overlays: [] }));
+  expect(exported.failed).toEqual([]);
+  await expect(page.getByRole("treeitem", { name: "notes/welcome.pdf", exact: true })).toBeVisible();
+  await open("notes/welcome.pdf");
+  await page.getByRole("button", { name: "Pin assignment", exact: true }).click();
+  await open("src/example.html");
+  await page.getByRole("button", { name: "Show live preview beside code", exact: true }).click();
+  const original = await disk("src/example.html");
+  const html = '<link rel="stylesheet" href="example.css"><h1>Live lesson</h1><script>parent.document.body.dataset.unsafe = "executed"</script>';
+  await sourceFill(html);
+  const preview = page.frameLocator('.live-preview iframe');
+  await expect(preview.locator("h1")).toHaveText("Live lesson");
+  await expect(preview.locator("h1")).toHaveCSS("color", "rgb(0, 128, 0)");
+  await expect(page.locator('.editor-pane[data-path="notes/welcome.pdf"] canvas').first()).toBeVisible();
+  await expect(page.locator('.editor-pane.active .cm-content')).toBeVisible();
+  expect(await disk("src/example.html")).toBe(original);
+  await open("src/example.css");
+  await sourceFill("h1 { color: rgb(120, 20, 30); }");
+  await expect(preview.locator("h1")).toHaveCSS("color", "rgb(120, 20, 30)");
+  await fs.writeFile(file("src/example.css"), "h1 { color: rgb(0, 0, 200); }");
+  // A dirty stylesheet wins over the externally modified disk copy.
+  await expect(preview.locator("h1")).toHaveCSS("color", "rgb(120, 20, 30)");
+  expect(await page.locator("body").getAttribute("data-unsafe")).toBeNull();
+  await open("src/example.html");
+  await preview.locator("h1").click();
+  await page.keyboard.press("F8");
+  await expect(page.locator(".application")).toHaveClass(/presentation-mode/);
+  await page.screenshot({ path: "test-results/teaching-live-preview.png" });
+  await page.getByRole("button", { name: "Leave presentation mode", exact: true }).click();
+  await expect(page.locator(".application")).not.toHaveClass(/presentation-mode/);
+  await open("src/example.css");
+  await expect.poll(async () => {
+    const saved = JSON.parse(await fs.readFile(path.join(data, "state.json"), "utf8")).sessions[root];
+    return saved?.livePreview && saved.previewTarget === "src/example.html" && saved.active === "src/example.css";
+  }).toBe(true);
+  await app.evaluate(({ app }) => app.exit());
+  await app.close().catch(() => {});
+  await launch();
+  await expect(page.frameLocator('.live-preview iframe').locator("h1")).toHaveText("Live lesson");
+  await expect(page.locator(".editor-tab.active")).toHaveAttribute("data-tooltip", "src/example.css");
+  await expect(page.locator('.editor-pane[data-path="notes/welcome.pdf"] canvas').first()).toBeVisible();
+  await page.getByRole("button", { name: "Close live preview", exact: true }).click();
+  await expect(page.locator(".live-preview")).toHaveCount(0);
+  expect(errors).toEqual([]);
+});
+
+test("Teaching live preview divider resizes code and result with mouse and keyboard and restores its ratio", async () => {
+  await open("src/example.html");
+  await page.getByRole("button", { name: "Show live preview beside code", exact: true }).click();
+  let divider = page.getByRole("separator", { name: "Resize code and live preview", exact: true });
+  let code = page.locator('.editor-pane[data-path="src/example.html"]');
+  let preview = page.locator(".live-preview");
+  await expect(divider).toHaveAttribute("aria-valuenow", "50");
+  const before = await code.boundingBox();
+  const handle = await divider.boundingBox();
+  const frame = page.frameLocator(".live-preview iframe");
+  await frame.locator("body").evaluate((body) => { body.dataset.resizePreserved = "yes"; });
+  await page.mouse.move(handle.x + handle.width / 2, handle.y + handle.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(handle.x + 170, handle.y + handle.height / 2, { steps: 12 });
+  await page.mouse.up();
+  await expect.poll(async () => (await code.boundingBox()).width).toBeGreaterThan(before.width + 120);
+  await expect.poll(async () => Number(await divider.getAttribute("aria-valuenow"))).toBeGreaterThan(60);
+  await expect(divider).toHaveAttribute("data-dragging", "false");
+  await expect(frame.locator("body")).toHaveAttribute("data-resize-preserved", "yes");
+  await divider.dblclick();
+  await expect(divider).toHaveAttribute("aria-valuenow", "50");
+  await divider.focus();
+  await page.keyboard.press("Home");
+  await expect(divider).toHaveAttribute("aria-valuenow", "20");
+  await page.keyboard.press("End");
+  await expect(divider).toHaveAttribute("aria-valuenow", "80");
+  await page.keyboard.press("Shift+ArrowLeft");
+  await page.keyboard.press("ArrowLeft");
+  await expect(divider).toHaveAttribute("aria-valuenow", "68");
+  await expect.poll(async () => JSON.parse(await fs.readFile(path.join(data, "state.json"), "utf8")).sessions[root]?.previewRatio).toBe(68);
+  await app.evaluate(({ app }) => app.exit());
+  await app.close().catch(() => {});
+  await launch();
+  divider = page.getByRole("separator", { name: "Resize code and live preview", exact: true });
+  code = page.locator('.editor-pane[data-path="src/example.html"]');
+  preview = page.locator(".live-preview");
+  await expect(divider).toHaveAttribute("aria-valuenow", "68");
+  await expect.poll(async () => (await code.boundingBox()).width / (await preview.boundingBox()).width).toBeGreaterThan(2);
+  // With an assignment pinned, the same handle resizes only code/result.
+  await open("notes/welcome.md");
+  await page.getByRole("button", { name: "Pin assignment", exact: true }).click();
+  await open("src/example.html");
+  const assignment = page.locator('.editor-pane[data-path="notes/welcome.md"]');
+  const assignmentBefore = await assignment.boundingBox();
+  const tripleHandle = await divider.boundingBox();
+  await page.mouse.move(tripleHandle.x + tripleHandle.width / 2, tripleHandle.y + 100);
+  await page.mouse.down();
+  await page.mouse.move(tripleHandle.x - 90, tripleHandle.y + 100, { steps: 10 });
+  await page.mouse.up();
+  await expect.poll(async () => Number(await divider.getAttribute("aria-valuenow"))).toBeLessThan(60);
+  expect(Math.abs((await assignment.boundingBox()).width - assignmentBefore.width)).toBeLessThan(2);
+  await page.getByRole("button", { name: "Show outline", exact: true }).click();
+  await expect(page.locator(".outline")).toBeVisible();
+  const resultBox = await preview.boundingBox();
+  const outlineBox = await page.locator(".outline").boundingBox();
+  expect(outlineBox.x).toBeGreaterThanOrEqual(resultBox.x + resultBox.width - 1);
+  await page.getByRole("button", { name: "Close live preview", exact: true }).click();
+  await expect(divider).toHaveCount(0);
+  await expect(assignment).toBeVisible();
+  await expect(code).toBeVisible();
+  expect(errors).toEqual([]);
+});
+
+test("Teaching live PHP preview explicitly starts, renders unsaved includes, reports errors and stops", async () => {
+  const { spawnSync } = await import("node:child_process");
+  test.skip(!["php", ...(process.platform === "darwin" ? ["/opt/homebrew/bin/php", "/usr/local/bin/php"] : [])].some((exe) => spawnSync(exe, ["-v"], { windowsHide: true }).status === 0), "PHP is not installed");
+  await open("src/example.php");
+  const original = await disk("src/example.php");
+  await sourceFill('<?php require "value.php"; echo "<h1>" . $value . "</h1>";');
+  await fs.writeFile(file("src/value.php"), '<?php $value = "Saved include";');
+  await expect(page.getByRole("treeitem", { name: "src/value.php", exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Show live preview beside code", exact: true }).click();
+  await expect(page.locator(".live-preview iframe")).toHaveCount(0);
+  await page.getByRole("button", { name: "Start PHP preview", exact: true }).click();
+  const preview = page.frameLocator('.live-preview iframe');
+  await expect(preview.locator("h1")).toHaveText("Saved include");
+  await open("src/value.php");
+  // Both PHP files are previewable; return to the entry point after editing the include.
+  await sourceFill('<?php $value = "Unsaved include";');
+  await open("src/example.php");
+  await expect(preview.locator("h1")).toHaveText("Unsaved include");
+  expect(await disk("src/example.php")).toBe(original);
+  expect(await disk("src/value.php")).toContain("Saved include");
+  await sourceFill("<?php if (");
+  await expect(preview.locator("body")).toContainText("Parse error");
+  await sourceFill('<?php echo "<h1>Recovered</h1>";');
+  await expect(preview.locator("h1")).toHaveText("Recovered");
+  await page.getByRole("button", { name: "Stop PHP preview", exact: true }).click();
+  await expect(page.getByRole("button", { name: "Start PHP preview", exact: true })).toBeVisible();
+  await sourceFill('<?php echo "<h1>Stopped</h1>";');
+  await expect(preview.locator("h1")).toHaveText("Recovered");
+  await page.getByRole("button", { name: "Close live preview", exact: true }).click();
   expect(errors).toEqual([]);
 });
 
@@ -4630,6 +4879,8 @@ test("UX clarity search scopes preserve the query and Explorer batch mode stays 
     .click();
   await expect(page.getByRole("treeitem", { selected: true })).toHaveCount(2);
   await page.keyboard.press("ArrowUp");
+  // Explorer keyboard navigation focuses the target on the next animation frame.
+  await expect(page.getByRole("treeitem", { name: "notes/other.md", exact: true })).toBeFocused();
   await expect(page.getByRole("treeitem", { selected: true })).toHaveCount(2);
   await page.keyboard.press("Space");
   await expect(page.getByRole("treeitem", { selected: true })).toHaveCount(1);

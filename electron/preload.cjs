@@ -9,6 +9,8 @@ const on = (channel) => (callback) => {
   return () => ipcRenderer.removeListener(channel, handler);
 };
 contextBridge.exposeInMainWorld("margin", {
+  phpPreview: invoke("preview:php"),
+  phpPreviewStop: invoke("preview:php-stop"),
   edit: invoke("app:edit"),
   copyText: invoke("app:copy-text"),
   readClipboardText: invoke("app:clipboard-text"),

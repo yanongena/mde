@@ -1,7 +1,11 @@
-import { dirname } from "./markdown.ts";
+import { dirname, assetURL } from "./markdown.ts";
 import { isSVG } from "./document-mode.ts";
 
-export function htmlPreviewDocument(path: string, text: string) {
+export function htmlPreviewDocument(
+  path: string,
+  text: string,
+  overlays: { path: string; text: string }[] = [],
+) {
   const parser = new DOMParser();
   const doc = parser.parseFromString(isSVG(path) ? "" : text, "text/html");
   if (isSVG(path)) {
@@ -23,6 +27,23 @@ export function htmlPreviewDocument(path: string, text: string) {
         "Unable to preview this SVG. Correct the SVG markup in Source.";
       doc.body.append(message);
     }
+  }
+  // Inline current stylesheet buffers; CSS URLs still resolve from the CSS file.
+  for (const link of doc.querySelectorAll('link[rel="stylesheet"][href]')) {
+    const url = assetURL(path, link.getAttribute("href") || "");
+    const buffer = overlays.find(
+      (entry) => assetURL("", "/" + entry.path) === url,
+    );
+    if (!buffer) continue;
+    const style = doc.createElement("style");
+    style.textContent = buffer.text.replace(
+      /url\(\s*(['"]?)([^)'"\s]+)\1\s*\)/gi,
+      (match, _quote, href) => {
+        const target = assetURL(buffer.path, href);
+        return target ? `url("${target}")` : match;
+      },
+    );
+    link.replaceWith(style);
   }
   // Keep the preview inside the workspace and prevent document-driven navigation.
   doc

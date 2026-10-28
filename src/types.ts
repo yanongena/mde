@@ -63,6 +63,11 @@ export interface SearchResults {
   truncated: boolean;
   cancelled: boolean;
 }
+export interface EditorSplit {
+  left: string;
+  right: string;
+  assignment?: boolean;
+}
 export interface Settings {
   theme: "light" | "dark";
   autosave: "off" | "afterDelay" | "onBlur";
@@ -86,6 +91,9 @@ export interface Settings {
   sidebarVisible: boolean;
   terminalVisible: boolean;
   focusMode: boolean;
+  presentationMode: boolean;
+  presentationFontSize: number;
+  presentationTheme: "inherit" | "light" | "dark";
 }
 export interface SpellcheckInfo {
   enabled: boolean;
@@ -101,7 +109,10 @@ export interface SavedSession {
   expanded: string[];
   closedTabs?: ClosedTab[];
   recentFiles?: string[];
-  split?: { left: string; right: string } | null;
+  split?: EditorSplit | null;
+  livePreview?: boolean;
+  previewTarget?: string;
+  previewRatio?: number;
 }
 export interface OpenedWorkspace {
   root: string;
@@ -119,6 +130,11 @@ export interface TerminalInfo {
   cwd?: string;
 }
 export interface MarginAPI {
+  phpPreview(request: {
+    path: string;
+    overlays: { path: string; text: string }[];
+  }): Promise<{ html: string; url: string; status: number }>;
+  phpPreviewStop(): Promise<void>;
   pdfRead(path: string): Promise<Uint8Array>;
   pdfPlan(request: PdfExportOptions): Promise<PdfExportPlan>;
   pdfExport(
@@ -222,7 +238,15 @@ export interface MarginAPI {
   persist(
     session: Pick<
       SavedSession,
-      "active" | "expanded" | "tabs" | "closedTabs" | "recentFiles" | "split"
+      | "active"
+      | "expanded"
+      | "tabs"
+      | "closedTabs"
+      | "recentFiles"
+      | "split"
+      | "livePreview"
+      | "previewTarget"
+      | "previewRatio"
     >,
   ): Promise<void>;
   openRecovery(): Promise<void>;
