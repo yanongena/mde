@@ -25,27 +25,20 @@ import {
   Image as ImageIcon,
   X,
   MoreHorizontal,
-  Sun,
-  Moon,
-  Save,
   Code2,
   PenLine,
   Eye,
   Check,
   ArrowUpRight,
-  Maximize2,
-  Minimize2,
   Command,
   AlertTriangle,
   ArrowRight,
   ArrowLeft,
   SearchCode,
   Pin,
-  Columns2,
   Folder,
   PanelBottomClose,
   PanelBottomOpen,
-  ListTree,
   ListChecks,
   LoaderCircle,
   Presentation,
@@ -280,6 +273,17 @@ export default function App() {
     [paletteIndex, setPaletteIndex] = useState(0);
   const [showSettings, setShowSettings] = useState(false),
     [showOutline, setShowOutline] = useState(false);
+  const [formatState, setFormatState] = useState({
+    path: "",
+    text: "",
+    busy: false,
+  });
+  const formatStatusChanged = useCallback(
+    (path: string, text: string, busy: boolean) => {
+      setFormatState({ path, text, busy });
+    },
+    [],
+  );
   const [dialog, setDialog] = useState<DialogSpec | null>(null),
     [dialogInput, setDialogInput] = useState("");
   const [pdfSource, setPdfSource] = useState<{
@@ -2761,6 +2765,8 @@ export default function App() {
         </div>
         <button
           className="global-search"
+          aria-label="Search files, contents or commands"
+          data-tooltip="Search files, contents or commands"
           onClick={() => {
             setPalette("files");
             setQuery("");
@@ -2768,7 +2774,7 @@ export default function App() {
           }}
         >
           <Search size={15} />
-          <span>Search files, contents or commands…</span>
+          <span>Search…</span>
           <kbd>{keyboard} P</kbd>
         </button>
         <div className="header-actions">
@@ -2787,28 +2793,6 @@ export default function App() {
           >
             <Presentation size={17} />
             <span>{presentation ? "Leave presentation" : "Present"}</span>
-            <kbd>F8</kbd>
-          </button>
-          <button
-            className="icon-button"
-            aria-label="Toggle focus mode"
-            data-tooltip="Focus mode"
-            onClick={() =>
-              void updateSettings({ focusMode: !settings.focusMode })
-            }
-          >
-            {settings.focusMode ? <Minimize2 /> : <Maximize2 />}
-          </button>
-          <button
-            className="icon-button"
-            aria-label="Toggle theme"
-            onClick={() =>
-              void updateSettings({
-                theme: settings.theme === "light" ? "dark" : "light",
-              })
-            }
-          >
-            {settings.theme === "light" ? <Moon /> : <Sun />}
           </button>
           <button
             className="icon-button"
@@ -3487,70 +3471,48 @@ export default function App() {
                 <Plus />
               </button>
             </div>
-            {current && (
+            {current && supportsVisualMode(current.path) && (
               <div
                 className="document-actions"
                 role="group"
                 aria-label="Writing"
               >
-                <span className="save-status" role="status" aria-live="polite">
-                  {isReadOnlyPreview(current.path) ? (
-                    <span className="save-state">Read-only</span>
-                  ) : current.dirty ? (
-                    <span className="save-state">Unsaved</span>
-                  ) : (
-                    <span className="save-state">
-                      <Check size={12} /> Saved
-                    </span>
-                  )}
-                </span>
-                {supportsVisualMode(current.path) && (
-                  <div
-                    className="mode-switch"
-                    role="group"
-                    aria-label="Editing mode"
-                  >
-                    <button
-                      aria-label="Visual mode"
-                      aria-pressed={current.mode === "visual"}
-                      className={current.mode === "visual" ? "active" : ""}
-                      onClick={() => {
-                        if (current.mode !== "visual") {
-                          setLivePreview(false);
-                          void toggleMode(current);
-                        }
-                      }}
-                    >
-                      {previewType(current.path) ||
-                      (isMarkdown(current.path) &&
-                        visualProtection(current.text)) ? (
-                        <Eye size={13} />
-                      ) : (
-                        <PenLine size={13} />
-                      )}{" "}
-                      Visual
-                    </button>
-                    <button
-                      aria-label={`${previewType(current.path) ?? "Markdown"} source mode`}
-                      aria-pressed={current.mode === "source"}
-                      className={current.mode === "source" ? "active" : ""}
-                      onClick={() => {
-                        if (current.mode !== "source") void toggleMode(current);
-                      }}
-                    >
-                      <Code2 size={14} /> Source
-                    </button>
-                  </div>
-                )}
-                <button
-                  className="icon-button small"
-                  aria-label="Save file"
-                  disabled={isReadOnlyPreview(current.path)}
-                  data-tooltip={`${keyboard}+S`}
-                  onClick={() => void saveTab(current.path)}
+                <div
+                  className="mode-switch"
+                  role="group"
+                  aria-label="Editing mode"
                 >
-                  <Save />
-                </button>
+                  <button
+                    aria-label="Visual mode"
+                    aria-pressed={current.mode === "visual"}
+                    className={current.mode === "visual" ? "active" : ""}
+                    onClick={() => {
+                      if (current.mode !== "visual") {
+                        setLivePreview(false);
+                        void toggleMode(current);
+                      }
+                    }}
+                  >
+                    {previewType(current.path) ||
+                    (isMarkdown(current.path) &&
+                      visualProtection(current.text)) ? (
+                      <Eye size={13} />
+                    ) : (
+                      <PenLine size={13} />
+                    )}{" "}
+                    Visual
+                  </button>
+                  <button
+                    aria-label={`${previewType(current.path) ?? "Markdown"} source mode`}
+                    aria-pressed={current.mode === "source"}
+                    className={current.mode === "source" ? "active" : ""}
+                    onClick={() => {
+                      if (current.mode !== "source") void toggleMode(current);
+                    }}
+                  >
+                    <Code2 size={14} /> Source
+                  </button>
+                </div>
               </div>
             )}
             {(split?.assignment ||
@@ -3589,32 +3551,53 @@ export default function App() {
                 <span>Preview</span>
               </button>
             )}
-            {current && (
-              <button
-                className="icon-button"
-                aria-label={split ? "Close split view" : "Split editor"}
-                data-tooltip={split ? "Close split view" : "Split editor"}
-                onClick={() => (split ? setSplit(null) : void openBeside())}
-              >
-                <Columns2 />
-              </button>
-            )}
-            {root && (
-              <button
-                className="icon-button"
-                aria-label="Show outline"
-                aria-expanded={showOutline}
-                aria-controls="document-outline"
-                disabled={!!current && isPDF(current.path)}
-                data-tooltip="Document outline"
-                onClick={() => setShowOutline(!showOutline)}
-              >
-                <ListTree />
-              </button>
-            )}
+            <button
+              className="view-menu-button"
+              aria-label="View options"
+              aria-haspopup="menu"
+              onClick={(event) => {
+                const button = event.currentTarget;
+                const rect = button.getBoundingClientRect();
+                openMenu({
+                  x: rect.left,
+                  y: rect.bottom + 4,
+                  restoreFocus: () => button.focus(),
+                  items: [
+                    {
+                      label: split ? "Close split view" : "Split editor",
+                      disabled: !current,
+                      run: () => (split ? setSplit(null) : openBeside()),
+                    },
+                    {
+                      label: showOutline ? "Hide outline" : "Show outline",
+                      disabled: !root || (!!current && isPDF(current.path)),
+                      run: () => setShowOutline(!showOutline),
+                    },
+                    null,
+                    {
+                      label: settings.focusMode
+                        ? "Leave focus mode"
+                        : "Enter focus mode",
+                      run: () =>
+                        updateSettings({ focusMode: !settings.focusMode }),
+                    },
+                    {
+                      label: `Switch to ${settings.theme === "light" ? "dark" : "light"} theme`,
+                      run: () =>
+                        updateSettings({
+                          theme: settings.theme === "light" ? "dark" : "light",
+                        }),
+                    },
+                  ],
+                });
+              }}
+            >
+              View <ChevronDown size={12} />
+            </button>
             <button
               className="document-menu-button"
               aria-label="Document actions"
+              data-tooltip="Document actions"
               aria-haspopup="menu"
               disabled={
                 reopeningClosed || (!root && !closedTabs.current.length)
@@ -3627,6 +3610,21 @@ export default function App() {
                   y: rect.bottom + 4,
                   restoreFocus: () => button.focus(),
                   items: [
+                    ...(current
+                      ? [
+                          {
+                            label: "Save file",
+                            shortcut: `${keyboard}+S`,
+                            disabled: isReadOnlyPreview(current.path),
+                            run: () => saveTab(current.path),
+                          },
+                          {
+                            label: "Save all files",
+                            shortcut: `${keyboard}+Shift+S`,
+                            run: () => saveAll(),
+                          },
+                        ]
+                      : []),
                     ...(current && !isReadOnlyPreview(current.path)
                       ? [
                           {
@@ -3637,6 +3635,31 @@ export default function App() {
                             label: "Save a copy…",
                             run: () => saveAs(current.path, true),
                           },
+                          null,
+                        ]
+                      : []),
+                    ...(current &&
+                    current.mode === "source" &&
+                    supportsFormatting(current.path)
+                      ? [
+                          {
+                            label: "Format document",
+                            shortcut: "Shift+Alt+F",
+                            disabled:
+                              formatState.path === current.path &&
+                              formatState.busy,
+                            run: () =>
+                              window.dispatchEvent(
+                                new CustomEvent("margin:format-document", {
+                                  detail: { path: current.path },
+                                }),
+                              ),
+                          },
+                          null,
+                        ]
+                      : []),
+                    ...(current && !isReadOnlyPreview(current.path)
+                      ? [
                           ...(isMarkdown(current.path)
                             ? [
                                 {
@@ -3654,7 +3677,6 @@ export default function App() {
                             label: "Local version history",
                             run: () => showHistory(current.path),
                           },
-                          null,
                         ]
                       : []),
                     {
@@ -3662,6 +3684,7 @@ export default function App() {
                       disabled: !root,
                       run: () => compareFiles(),
                     },
+                    null,
                     {
                       label: "Reopen closed tab",
                       shortcut: keyboard + "+Shift+T",
@@ -3673,8 +3696,6 @@ export default function App() {
               }}
             >
               <MoreHorizontal size={16} />
-              <span>Document</span>
-              <ChevronDown size={12} />
             </button>
           </div>
           {recovery.length > 0 && (
@@ -3863,6 +3884,7 @@ export default function App() {
                       position={positions.current.get(tab.path) || tab.position}
                       onChange={(text) => edit(tab.path, text)}
                       onError={(text) => notify(text, true)}
+                      onFormatStatus={formatStatusChanged}
                     />
                   </>
                 )}
@@ -4101,6 +4123,34 @@ export default function App() {
         <span className="grow" />
         {current && (
           <>
+            <span className="save-status" role="status" aria-live="polite">
+              <span className="save-state">
+                {isReadOnlyPreview(current.path) ? (
+                  "Read-only"
+                ) : current.conflict ? (
+                  <>
+                    <AlertTriangle size={12} /> Conflict
+                  </>
+                ) : current.dirty ? (
+                  "Unsaved"
+                ) : (
+                  <>
+                    <Check size={12} /> Saved
+                  </>
+                )}
+              </span>
+            </span>
+            {current.mode === "source" &&
+              formatState.path === current.path &&
+              (formatState.busy || formatState.text) && (
+                <span
+                  className="format-status"
+                  role="status"
+                  title={formatState.busy ? "Formatting…" : formatState.text}
+                >
+                  {formatState.busy ? "Formatting…" : formatState.text}
+                </span>
+              )}
             {!isPDF(current.path) && (
               <>
                 <span>

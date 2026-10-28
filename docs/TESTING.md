@@ -37,6 +37,22 @@ Verification on 26 October 2026 (macOS, source application): `npm run check` pas
 
 ## Coverage
 
+Toolbar declutter (28 October 2026, Windows source): the source editor no longer reserves a formatting row. Save and formatting actions live in the Document menu; split, outline, focus and theme controls live in View. Save/conflict and formatting feedback are in the footer. The new compact-window workflow checks the two-row chrome at 820 px, keyboard menu navigation and focus restoration, formatting and saving the active file, dirty-tab feedback and both themes. Screenshots: `test-results/decluttered-toolbar.png`, `decluttered-toolbar-light.png` and `decluttered-toolbar-dark.png`.
+
+Verification commands for this change:
+
+```sh
+npm run build
+node node_modules/@playwright/test/cli.js test --grep 'decluttered toolbar|compact editor|UX clarity readable|formatting preference|code auto-format|format worker|browser worker'
+node node_modules/@playwright/test/cli.js test --grep 'Teaching |document outline|P2 QoL outline|P3 QoL split|PDF viewer|P2 QoL Save Copy|decluttered toolbar'
+node node_modules/@playwright/test/cli.js test --grep 'PDF viewer opens|Teaching live PHP|P3 QoL split documents'
+node --test tests/php-preview.test.mjs
+npm run test:e2e:smoke
+node node_modules/@playwright/test/cli.js test --grep 'decluttered toolbar'
+```
+
+The build, all three smoke workflows and the final compact-toolbar rerun passed; 22 distinct hidden workflows passed across these runs. The first seven focused workflows passed. The 15-workflow related run passed 12; the PDF restart check passed on rerun after making it wait for both the saved active tab and PDF page before forced exit. The two remaining failures reproduce identically in a separate, unmodified export of `30b9c7d`, built with `npm run build` and tested with `node node_modules/@playwright/test/cli.js test --grep 'Teaching live PHP|P3 QoL split documents'`: PHP preview retains its previous output after a syntax error, and the mixed visual/source split restores source scroll to 14 rather than 750. These existing behaviors were left outside this toolbar change. The diagnostic PHP Node suite passed three tests, including actual syntax-error output; its fourth test cannot create a file symlink on this Windows account (`EPERM`). Full regression and packaged applications were not run.
+
 Live-preview divider follow-up (28 October 2026): `npm run build` passed. Eight hidden workflows were verified using `npm run test:e2e -- --grep 'Teaching live preview divider|Teaching live HTML|Teaching live PHP|P3 QoL split|@smoke'`, with the divider workflow rerun after correcting its test locators to use the new window after restart. The divider test exercises actual mouse dragging across the preview without reloading its iframe, keyboard steps/bounds, double-click reset, persisted workspace ratios, resizing beside a pinned assignment, outline placement and closing the preview. The other seven cover existing HTML/PHP previews, both shared split workflows and all three smoke workflows. Packaged applications were not rebuilt.
 
 Presentation theme follow-up (28 October 2026): presentation now defaults to **Follow workspace theme** for both application chrome and source syntax colors. A one-time migration changes the previous persisted light default to follow the workspace; subsequent explicit light/dark overrides survive restart. `npm run build` passed, followed by all seven hidden workflows selected with `npm run test:e2e -- --grep 'Teaching presentation|UX clarity preferences|UX clarity readable|@smoke'`. Coverage includes following live theme changes, migration, override persistence, ordinary-theme restoration, preference behavior, contrast and the three shared smoke workflows. No installers were rebuilt.

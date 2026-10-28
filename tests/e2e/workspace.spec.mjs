@@ -25,6 +25,17 @@ async function documentAction(name) {
   await page.getByRole("menuitem", {name, exact: true}).click();
 }
 
+async function viewAction(name) {
+  await page.getByRole("button", { name: "View options", exact: true }).click();
+  await page.getByRole("menuitem", { name, exact: true }).click();
+}
+async function toggleTheme() {
+  await viewAction(/^Switch to (dark|light) theme$/);
+}
+async function toggleOutline() {
+  await viewAction(/^(Show|Hide) outline$/);
+}
+
 async function settingsManual() {
   await page.getByRole("button", { name: "Preferences", exact: true }).click();
   await page.getByLabel("Autosave policy").selectOption("off");
@@ -175,7 +186,9 @@ test("PDF viewer opens exported documents inside tabs with navigation, text sear
   await expect(viewer.getByLabel("PDF page count", { exact: true })).toHaveText("/ 2");
   await expect(viewer.locator('.page[data-page-number="1"] canvas')).toBeVisible();
   await expect(viewer.locator(".textLayer")).toContainText(["Café en België."]);
-  await expect(page.getByRole("button", { name: "Save file", exact: true })).toBeDisabled();
+  await page.getByRole("button", { name: "Document actions", exact: true }).click();
+  await expect(page.getByRole("menuitem", { name: "Save file", exact: true })).toBeDisabled();
+  await page.keyboard.press("Escape");
   await expect(page.getByRole("button", { name: "Markdown source mode", exact: true })).toHaveCount(0);
   await expect(viewer.getByRole("group", { name: "PDF zoom controls", exact: true })).toBeVisible();
   await expect(viewer.getByRole("button", { name: "Zoom out PDF", exact: true })).toHaveText("Zoom out");
@@ -212,8 +225,12 @@ test("PDF viewer opens exported documents inside tabs with navigation, text sear
   }
   await expect.poll(async () => {
     const state = JSON.parse(await fs.readFile(path.join(data, "state.json"), "utf8"));
-    return state.sessions[root]?.tabs.find((tab) => tab.path === "notes.pdf")?.position?.pdf?.page;
-  }).toBe(2);
+    const session = state.sessions[root];
+    return {
+      active: session?.active,
+      page: session?.tabs.find((tab) => tab.path === "notes.pdf")?.position?.pdf?.page,
+    };
+  }).toEqual({ active: "notes.pdf", page: 2 });
   await app.evaluate(({ app }) => app.exit());
   await app.close().catch(() => {});
   await launch();
@@ -513,7 +530,7 @@ test("Teaching live preview divider resizes code and result with mouse and keybo
   await page.mouse.up();
   await expect.poll(async () => Number(await divider.getAttribute("aria-valuenow"))).toBeLessThan(60);
   expect(Math.abs((await assignment.boundingBox()).width - assignmentBefore.width)).toBeLessThan(2);
-  await page.getByRole("button", { name: "Show outline", exact: true }).click();
+  await toggleOutline();
   await expect(page.locator(".outline")).toBeVisible();
   const resultBox = await preview.boundingBox();
   const outlineBox = await page.locator(".outline").boundingBox();
@@ -621,7 +638,7 @@ test("HTML visual mode survives external reloads and a restart while HTM default
   await launch();
   await expect(page.frameLocator('iframe[title="HTML preview for src/example.html"]').locator("h1")).toHaveText("External update");
   await expect(page.frameLocator('iframe[title="HTML preview for src/example.html"]').getByRole("heading", { name: "End", exact: true })).toBeInViewport();
-  await page.getByRole("button", { name: "Show outline", exact: true }).click();
+  await toggleOutline();
   await page.getByRole("complementary", { name: "Document outline" }).getByRole("button", { name: /h2 — End, line/ }).click();
   await expect(page.getByRole("button", { name: "HTML source mode" })).toHaveClass("active");
   await expect(page.locator(".editor-pane.active .cm-content")).toBeFocused();
@@ -975,7 +992,7 @@ test("PowerShell PTYs, multiple interactive terminals, layout and session restor
   const terminalHeight = await page
     .locator(".terminal-panel")
     .evaluate((e) => e.getBoundingClientRect().height);
-  await page.getByRole("button", { name: "Toggle theme", exact: true }).click();
+  await toggleTheme();
   await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
   await page.screenshot({ path: "test-results/dark-terminal.png" });
   await page.evaluate(() =>
@@ -1445,7 +1462,7 @@ test("Markdown visual preview renders PHP examples and reference links while pre
   );
   await open("php-example.md");
   await expect(preview).toBeVisible();
-  await page.getByRole("button", { name: "Show outline", exact: true }).click();
+  await toggleOutline();
   await page
     .getByRole("complementary", { name: "Document outline" })
     .locator(".outline-entry")
@@ -1496,12 +1513,12 @@ test("compact editor keeps actions in tabs and tooltips appear promptly", async 
   await expect(
     page.locator(".breadcrumbs, .document-header, .source-label"),
   ).toHaveCount(0);
-  await expect(page.locator(".tabs-bar .save-state")).toContainText("Saved");
-  await expect(
-    page
-      .locator(".tabs-bar")
-      .getByRole("button", { name: "Save file", exact: true }),
-  ).toBeVisible();
+  await expect(page.locator(".status-bar .save-state")).toContainText("Saved");
+  await expect(page.locator(".tabs-bar .save-state, .code-format-toolbar")).toHaveCount(0);
+  await page.getByRole("button", { name: "Document actions", exact: true }).click();
+  await expect(page.getByRole("menuitem", { name: "Save file", exact: true })).toBeVisible();
+  await expect(page.getByRole("menuitem", { name: "Format document", exact: true })).toBeVisible();
+  await page.keyboard.press("Escape");
   const tabs = await page.locator(".tabs-bar").boundingBox();
   const editor = await page.locator(".editor-pane.active").boundingBox();
   expect(Math.abs(editor.y - (tabs.y + tabs.height))).toBeLessThan(1);
@@ -1540,7 +1557,7 @@ test("compact editor keeps actions in tabs and tooltips appear promptly", async 
   await expect(tooltip).toHaveText("New folder", { timeout: 800 });
   await page.keyboard.press("Tab");
   await expect(tooltip).toHaveCount(0);
-  await page.getByRole("button", { name: "Toggle theme", exact: true }).click();
+  await toggleTheme();
   await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
   await page.screenshot({ path: "test-results/compact-editor.png" });
   await open("notes/welcome.md");
@@ -1561,6 +1578,61 @@ test("compact editor keeps actions in tabs and tooltips appear promptly", async 
   expect(errors).toEqual([]);
 });
 
+test("decluttered toolbar keeps two rows, keyboard menus and active-file status in compact windows", async () => {
+  await page.getByRole("button", { name: "Preferences", exact: true }).click();
+  await page.getByLabel("Automatically format code on open", { exact: true }).uncheck();
+  await page.getByRole("button", { name: "Close preferences" }).click();
+  await open("src/example.html");
+  await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setContentSize(820, 650));
+
+  await expect(page.locator(".app-header .icon-button")).toHaveCount(1);
+  await expect(page.locator(".presentation-button kbd, .code-format-toolbar")).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Show live preview beside code", exact: true })).toBeVisible();
+  const tabs = await page.locator(".tabs-bar").boundingBox();
+  const code = await page.locator(".editor-pane.active .cm-editor").boundingBox();
+  expect(tabs.height).toBe(43);
+  expect(Math.abs(code.y - tabs.y - tabs.height)).toBeLessThan(1);
+  const view = page.getByRole("button", { name: "View options", exact: true });
+  await view.focus();
+  await page.keyboard.press("Enter");
+  await expect(page.getByRole("menuitem", { name: "Split editor", exact: true })).toBeFocused();
+  await page.keyboard.press("ArrowDown");
+  await page.keyboard.press("Enter");
+  await expect(page.getByRole("complementary", { name: "Document outline", exact: true })).toBeVisible();
+  await viewAction("Hide outline");
+  await viewAction("Enter focus mode");
+  await expect(page.locator(".application")).toHaveClass(/focus-mode/);
+  await viewAction("Leave focus mode");
+  await expect(page.locator(".application")).not.toHaveClass(/focus-mode/);
+
+  await sourceFill("<html><body><h1>Toolbar test</h1></body></html>");
+  await expect(page.locator(".status-bar .save-state")).toHaveText("Unsaved");
+  await expect(page.locator(".editor-tab.active .dirty-dot")).toBeVisible();
+  await documentAction("Format document");
+  await expect(page.locator(".status-bar .format-status")).toContainText("Formatted");
+  await expect(page.locator(".editor-pane.active .cm-content")).toBeFocused();
+  await documentAction("Save file");
+  await expect(page.locator(".status-bar .save-state")).toHaveText("Saved");
+  expect(await disk("src/example.html")).toContain("Toolbar test");
+  await page.screenshot({ path: "test-results/decluttered-toolbar-light.png" });
+
+  await toggleTheme();
+  await open("notes/welcome.md");
+  await expect(page.locator(".status-bar .format-status")).toHaveCount(0);
+  await expect(page.getByRole("group", { name: "Editing mode", exact: true })).toBeVisible();
+  expect((await page.locator(".tabs-bar").boundingBox()).height).toBe(43);
+  await view.focus();
+  await page.keyboard.press("Enter");
+  await page.keyboard.press("Escape");
+  await expect(view).toBeFocused();
+  await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setContentSize(1200, 760));
+  await open("src/example.php");
+  await page.mouse.move(0, 0);
+  await page.screenshot({ path: "test-results/decluttered-toolbar-dark.png" });
+  await page.screenshot({ path: "test-results/decluttered-toolbar.png", clip: { x: 0, y: 0, width: 1200, height: 150 } });
+  expect(errors).toEqual([]);
+});
+
 test("code auto-format defaults on, respects indentation and is a single undoable edit", async () => {
   const input =
     "<!doctype html><html><head><style>body{margin:0;padding:10px}</style></head><body><h1>Hello</h1><p>Readable code.</p></body></html>";
@@ -1577,7 +1649,7 @@ test("code auto-format defaults on, respects indentation and is a single undoabl
   await open("format.html");
   const content = page.locator(".editor-pane.active .cm-content");
   await expect(
-    page.locator(".editor-pane.active .code-format-toolbar"),
+    page.locator(".status-bar .format-status"),
   ).toContainText("Automatically formatted");
   const firstLine = await content.locator(".cm-line").first().boundingBox();
   const firstNumber = await page
@@ -1667,9 +1739,7 @@ test("formatting preference persists, manual command/shortcut work, and invalid 
     page.getByRole("treeitem", { name: "invalid.js", exact: true }),
   ).toBeVisible();
   await open("invalid.js");
-  await page
-    .getByRole("button", { name: "Format document", exact: true })
-    .click();
+  await documentAction("Format document");
   await expect(page.getByRole("alert")).toBeVisible();
   await expect(content).toHaveText("function broken( {");
   expect(await disk("invalid.js")).toBe("function broken( {");
@@ -1687,9 +1757,9 @@ test("format worker never overwrites edits made while formatting", async () => {
   ).toBeVisible();
   await open("large.js");
   await sourceFill("const typedByUser = 42;");
-  await expect(
-    page.locator(".editor-pane.active .code-format-toolbar button"),
-  ).not.toBeDisabled();
+  await page.getByRole("button", { name: "Document actions", exact: true }).click();
+  await expect(page.getByRole("menuitem", { name: "Format document", exact: true })).not.toBeDisabled();
+  await page.keyboard.press("Escape");
   await expect(page.locator(".editor-pane.active .cm-content")).toHaveText(
     "const typedByUser = 42;",
   );
@@ -1719,7 +1789,7 @@ test("browser worker formats JSON, YAML, PHP and XML without desktop privileges"
     ).toBeVisible();
     await open(name);
     await expect(
-      page.locator(".editor-pane.active .code-format-toolbar"),
+      page.locator(".status-bar .format-status"),
     ).toContainText("Automatically formatted");
     await expect(page.locator(".editor-pane.active .cm-content")).toContainText(
       expected,
@@ -1746,7 +1816,7 @@ test("document outline navigates HTML and mixed PHP, updates unsaved edits and s
     page.getByRole("treeitem", { name: "outline.html", exact: true }),
   ).toBeVisible();
   await open("outline.html");
-  await page.getByRole("button", { name: "Show outline", exact: true }).click();
+  await toggleOutline();
   const outline = page.getByRole("complementary", { name: "Document outline" });
   await expect(
     outline.getByRole("button", { name: "main#app, line 1", exact: true }),
@@ -1808,9 +1878,9 @@ test("document outline navigates HTML and mixed PHP, updates unsaved edits and s
     .getByRole("button", { name: "Close outline", exact: true })
     .click();
   await expect(outline).toHaveCount(0);
-  await expect(
-    page.getByRole("button", { name: "Show outline", exact: true }),
-  ).toHaveAttribute("aria-expanded", "false");
+  await page.getByRole("button", { name: "View options", exact: true }).click();
+  await expect(page.getByRole("menuitem", { name: "Show outline", exact: true })).toBeVisible();
+  await page.keyboard.press("Escape");
   expect(errors).toEqual([]);
 });
 
@@ -1841,7 +1911,7 @@ test("document outline covers code languages, Markdown navigation and unsupporte
     ["outline.json", '{"key": true}', null],
   ];
   // Default-on formatting changes line positions; labels must track the actual buffer.
-  await page.getByRole("button", { name: "Show outline", exact: true }).click();
+  await toggleOutline();
   const outline = page.getByRole("complementary", { name: "Document outline" });
   for (const [name, text, label] of fixtures) {
     await fs.writeFile(file(name), text);
@@ -2815,7 +2885,7 @@ test("P3 section menus copy identical full titles and links in visual, source an
   await page.keyboard.press("Shift+F10");
   await menuAction("Copy section title");
   await expect.poll(readClipboard).toBe("Repeat é & tea");
-  await page.getByRole("button", { name: "Show outline", exact: true }).click();
+  await toggleOutline();
   const outline = page.getByRole("complementary", { name: "Document outline" });
   const repeated = outline
     .locator(".outline-entry")
@@ -2934,7 +3004,7 @@ test("P3 section menus support protected Setext headings, unsaved changes and fe
     .click({ button: "right" });
   await menuAction("Copy section link");
   await expect.poll(readClipboard).toBe("[Same](/notes/welcome.md#same-1)");
-  await page.getByRole("button", { name: "Show outline", exact: true }).click();
+  await toggleOutline();
   const outline = page.getByRole("complementary", { name: "Document outline" });
   await outline.locator(".outline-entry").last().click({ button: "right" });
   await menuAction("Copy section title");
@@ -3148,7 +3218,7 @@ test("QoL navigation restores selections and scroll, supports forward and branch
     page.getByRole("button", { name: "Navigate forward", exact: true }),
   ).toBeDisabled();
   await open("notes/welcome.md");
-  await page.getByRole("button", { name: "Show outline", exact: true }).click();
+  await toggleOutline();
   await page
     .getByRole("complementary", { name: "Document outline" })
     .getByRole("button", { name: /Bottom, line/ })
@@ -3217,7 +3287,7 @@ test("QoL session restores source caret, mode and scroll after restarting", asyn
   await page
     .getByRole("button", { name: "Markdown source mode", exact: true })
     .click();
-  await page.getByRole("button", { name: "Show outline", exact: true }).click();
+  await toggleOutline();
   await page
     .getByRole("complementary", { name: "Document outline" })
     .getByRole("button", { name: /Remember, line/ })
@@ -3521,7 +3591,7 @@ test("P2 QoL outline follows caret and scroll, filters with ancestors and collap
     "## Child\n\nchild text\n\n### Grandchild\n\nend\n";
   await fs.writeFile(file("notes/welcome.md"), original);
   await open("notes/welcome.md");
-  await page.getByRole("button", { name: "Show outline", exact: true }).click();
+  await toggleOutline();
   const outline = page.getByRole("complementary", { name: "Document outline" });
   const child = outline.getByRole("button", { name: /^Child, line/ });
   await child.click();
@@ -3662,7 +3732,7 @@ test("P2 QoL link picker uses dirty headings, duplicate anchors and encoded file
   await page
     .getByRole("button", { name: "Choose file or section", exact: true })
     .click();
-  await page.getByRole("button", { name: "Toggle theme", exact: true }).click();
+  await toggleTheme();
   const picker = page.getByRole("region", { name: "Workspace link picker" });
   await picker.getByLabel("Find link file").fill("sectionspace");
   await picker.getByRole("button", { name: target, exact: true }).click();
@@ -3903,7 +3973,7 @@ test("P2 QoL conflicts highlight aligned line changes, synchronize scrolling and
     .replace("line 2", "mine 2")
     .replace("line 60", "mine 60");
   await sourceFill(mine);
-  await page.getByRole("button", { name: "Toggle theme", exact: true }).click();
+  await toggleTheme();
   const external = original
     .replace("line 2", "external 2")
     .replace("line 20", "inserted\nline 20");
@@ -4760,9 +4830,7 @@ test("P3 QoL split documents edit and scroll independently, restore across resta
     )
     .toBeLessThan(2);
   await page.screenshot({ path: "test-results/p3-split.png" });
-  await page
-    .getByRole("button", { name: "Close split view", exact: true })
-    .click();
+  await viewAction("Close split view");
   await expect(page.locator(".editor-area")).not.toHaveClass(/split/);
   await expect(page.locator(".editor-tab")).toHaveCount(2);
   expect(errors).toEqual([]);
@@ -4770,7 +4838,7 @@ test("P3 QoL split documents edit and scroll independently, restore across resta
 
 test("P3 QoL split mode routes new documents into the focused pane and preserves reference files through moves", async () => {
   await open("notes/welcome.md");
-  await page.getByRole("button", { name: "Split editor", exact: true }).click();
+  await viewAction("Split editor");
   await expect(
     page.getByRole("dialog", { name: "Quick open", exact: true }),
   ).toContainText("CHOOSE A SECOND DOCUMENT");
@@ -4786,7 +4854,7 @@ test("P3 QoL split mode routes new documents into the focused pane and preserves
   await page
     .getByRole("button", { name: "Close other.md", exact: true })
     .click();
-  await page.getByRole("button", { name: "Split editor", exact: true }).click();
+  await viewAction("Split editor");
   await page.getByLabel("Search files", { exact: true }).fill("other.md");
   await page.keyboard.press("Enter");
   await expect(page.locator(".editor-pane.split-visible")).toHaveCount(2);
@@ -5019,9 +5087,7 @@ test("UX clarity readable contrast, compact document actions and keyboard access
   await open("notes/welcome.md");
   for (const theme of ["light", "dark"]) {
     if (theme === "dark")
-      await page
-        .getByRole("button", { name: "Toggle theme", exact: true })
-        .click();
+      await toggleTheme();
     const metrics = await page.evaluate(() => {
       const luminance = (color) => {
         const rgb = color

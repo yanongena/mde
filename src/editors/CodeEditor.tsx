@@ -28,7 +28,6 @@ import {
 } from "@codemirror/search";
 import { oneDark } from "@codemirror/theme-one-dark";
 import type { Settings, EditorPosition } from "../types";
-import { WandSparkles } from "lucide-react";
 import { supportsFormatting } from "../lib/formatting";
 import { requestFormatting } from "../lib/formatter-client";
 import { useContextMenu } from "../components/ContextMenu";
@@ -61,6 +60,7 @@ interface Props {
   allowAutoFormat?: boolean;
   onChange(text: string): void;
   onError?(message: string): void;
+  onFormatStatus?(path: string, text: string, busy: boolean): void;
   position?: EditorPosition;
 }
 export function CodeEditor({
@@ -72,6 +72,7 @@ export function CodeEditor({
   allowAutoFormat = true,
   onChange,
   onError,
+  onFormatStatus,
   position,
 }: Props) {
   const { openMenu } = useContextMenu();
@@ -93,6 +94,9 @@ export function CodeEditor({
   const restoredPosition = useRef(false);
   const [formatStatus, setFormatStatus] = useState(""),
     [isFormatting, setIsFormatting] = useState(false);
+  useEffect(() => {
+    if (active) onFormatStatus?.(path, formatStatus, isFormatting);
+  }, [active, path, formatStatus, isFormatting, onFormatStatus]);
   const formatRef = useRef<(automatic?: boolean) => Promise<void>>(
     async () => {},
   );
@@ -512,8 +516,10 @@ export function CodeEditor({
     };
     window.addEventListener("margin:goto-line", goto);
     const format = (event: Event) => {
-      if ((event as CustomEvent<{ path: string }>).detail.path === path)
+      if ((event as CustomEvent<{ path: string }>).detail.path === path) {
+        current.focus();
         void formatRef.current();
+      }
     };
     window.addEventListener("margin:format-document", format);
     const find = (event: Event) => {
@@ -581,27 +587,6 @@ export function CodeEditor({
   }, [active, settings.formatOnOpen]);
   return (
     <div className="code-editor-container">
-      {supportsFormatting(path) && (
-        <div className="code-format-toolbar">
-          <span role="status">
-            {isFormatting ? "Formatting…" : formatStatus}
-          </span>
-          <button
-            type="button"
-            disabled={isFormatting}
-            aria-label="Format document"
-            data-tooltip="Format document (Shift+Alt+F)"
-            onMouseDown={(event) => event.preventDefault()}
-            onClick={() => {
-              view.current?.focus();
-              void formatRef.current();
-            }}
-          >
-            <WandSparkles size={13} />
-            Format document<kbd>⇧ Alt F</kbd>
-          </button>
-        </div>
-      )}
       <div
         className="code-editor"
         data-testid="code-editor"

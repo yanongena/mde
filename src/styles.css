@@ -238,7 +238,7 @@ kbd {
 }
 .global-search {
   margin-left: auto;
-  width: 340px;
+  width: 240px;
   max-width: 35vw;
   justify-content: flex-start;
   color: var(--muted);
@@ -700,8 +700,7 @@ kbd {
   opacity: 0;
 }
 .document-actions {
-  padding: 0 10px;
-  border-left: 1px solid var(--line);
+  padding: 0 6px;
   display: flex;
   align-items: center;
   gap: 8px;
@@ -1109,32 +1108,6 @@ kbd {
   background: white;
   color-scheme: light;
 }
-.code-format-toolbar {
-  min-height: 32px;
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 3px 18px;
-  background: var(--surface);
-  border-bottom: 1px solid var(--line);
-  color: var(--muted);
-  font-size: 11px;
-  flex-shrink: 0;
-}
-.code-format-toolbar > span {
-  flex: 1;
-}
-.code-format-toolbar button {
-  border: 0;
-  background: none;
-  color: var(--quiet);
-  padding: 4px 6px;
-  font-size: 11px;
-}
-.code-format-toolbar kbd {
-  margin-left: 4px;
-  font-size: 11px;
-}
 .settings-section > label input[type="checkbox"] {
   width: 16px;
   height: 16px;
@@ -1419,6 +1392,19 @@ kbd {
   display: flex;
   align-items: center;
   gap: 8px;
+  min-width: 0;
+}
+.status-left > span:not(.local-indicator), .format-status {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.format-status {
+  min-width: 0;
+  max-width: 280px;
+}
+.save-status {
+  flex-shrink: 0;
 }
 .status-bar button {
   padding: 2px 0;
@@ -2160,7 +2146,7 @@ kbd {
     min-width: 100px;
   }
   .global-search {
-    width: 290px;
+    width: 220px;
   }
   .format-toolbar {
     padding-left: 12px;
@@ -2708,10 +2694,16 @@ kbd {
   color: var(--accent);
   background: var(--accent-soft, var(--surface));
 }
+.presentation-button, .teaching-action, .view-menu-button, .document-menu-button {
+  border-color: transparent;
+  background: transparent;
+}
+.presentation-button:hover, .teaching-action:hover, .view-menu-button:hover, .document-menu-button:hover {
+  background: var(--hover);
+}
 .presentation-mode .workspace-location, .presentation-mode .global-search,
 .presentation-mode .brand, .presentation-mode .header-actions > .icon-button,
-.presentation-mode .status-bar, .presentation-mode .format-toolbar,
-.presentation-mode .code-format-toolbar {
+.presentation-mode .status-bar, .presentation-mode .format-toolbar {
   display: none;
 }
 .presentation-mode .app-header { justify-content: flex-end; }
@@ -2804,13 +2796,15 @@ kbd {
   border-color: var(--accent);
   font-weight: 600;
 }
-.document-menu-button {
+.document-menu-button, .view-menu-button {
   align-self: center;
   margin: 0 6px;
   padding: 6px 8px;
   min-height: 30px;
-  background: var(--surface);
+  background: transparent;
+  border-color: transparent;
   white-space: nowrap;
+  flex-shrink: 0;
 }
 .save-status {
   display: inline-flex;
@@ -2900,29 +2894,10 @@ kbd {
   min-height: 28px;
 }
 @media (max-width: 1100px) {
-  .tabs-bar:has(.document-actions) {
-    height: auto;
-    flex-wrap: wrap;
-  }
-  .tabs-bar:has(.document-actions) .tabs-scroll {
-    flex-basis: calc(100% - 70px);
-    height: 43px;
-  }
-  .tabs-bar:has(.document-actions) .navigation-buttons {
-    height: 43px;
-  }
-  .document-actions {
-    flex: 1;
-    min-height: 39px;
-    border-left: 0;
-  }
-  .document-menu-button {
+  .document-menu-button, .view-menu-button {
     gap: 3px;
     margin: 0 4px;
     padding: 6px;
-  }
-  .document-menu-button > svg:first-child {
-    display: none;
   }
   .status-bar {
     gap: 12px;
