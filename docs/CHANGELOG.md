@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased — Workbench UI trial
+
+- Added Workbench as the compact default, with a smaller project header, separate file/document rows, neutral light/dark surfaces, a labelled Document menu and direct Outline control. Classic remains available in Preferences without replacing open editors or running processes.
+- Grouped visual Markdown insertion and secondary marks into labelled menus using the existing editor commands, and added toolbar arrow-key navigation with visible focus and usable control targets.
+- Added Lesson layout for a chosen Markdown/PDF assignment and HTML/PHP source with live preview. The previous layout persists for restoration after restart, follows app moves/Save as, and keeps unsaved text and hidden terminals alive. PHP still starts explicitly.
+- Documented the UX research, action destinations and trial behavior in `docs/WORKBENCH.md`.
+- Verified the final macOS source build with all 92 Node tests and all 100 hidden Electron workflows. Packaged applications and installers were not rebuilt.
+
 ## Unreleased — interface clarity
 
 - Increased secondary text contrast in both themes and raised small interface text; save status and the status bar use 12 px text.

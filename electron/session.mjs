@@ -1,3 +1,35 @@
+// A lesson preset stores only layout metadata; paths must already belong to validated tabs.
+export function savedLessonLayout(value, tabs) {
+  if (!value || typeof value !== "object") return null;
+  const has = (name) =>
+    typeof name === "string" && tabs.some((tab) => tab.path === name);
+  const pair = value.split;
+  return {
+    active: has(value.active) ? value.active : "",
+    split:
+      pair &&
+      pair.left !== pair.right &&
+      has(pair.left) &&
+      (has(pair.right) || (pair.assignment === true && pair.right === ""))
+        ? {
+            left: pair.left,
+            right: pair.right,
+            assignment: pair.assignment === true,
+          }
+        : null,
+    livePreview: value.livePreview === true,
+    previewTarget:
+      has(value.previewTarget) &&
+      /\.(html?|php|phtml)$/i.test(value.previewTarget)
+        ? value.previewTarget
+        : "",
+    previewCodeHidden: value.previewCodeHidden === true,
+    sidebarVisible: value.sidebarVisible === true,
+    terminalVisible: value.terminalVisible === true,
+    outlineVisible: value.outlineVisible === true,
+  };
+}
+
 export function savedPosition(value) {
   if (
     !value ||

@@ -9,7 +9,7 @@ import {
 } from "../src/lib/editor-position.ts";
 import { visualMatches } from "../src/editors/visual-search.ts";
 import { NavigationHistory } from "../src/lib/navigation.ts";
-import { savedPosition } from "../electron/session.mjs";
+import { savedPosition, savedLessonLayout } from "../electron/session.mjs";
 const schema = new Schema({
   nodes: {
     doc: { content: "block+" },
@@ -106,4 +106,22 @@ test("saved view state validates numeric bounds and discards malformed positions
   assert.equal(savedPosition({ ...value, head: NaN }), undefined);
   assert.equal(savedPosition({ ...value, mode: "script" }), undefined);
   assert.equal(savedPosition({ ...value, scrollRatio: 100 }).scrollRatio, 1);
+});
+
+
+test("lesson layout recovery drops stale tab paths and keeps only valid layout metadata", () => {
+  const tabs = [{ path: "note.md" }, { path: "code.html" }];
+  const snapshot = {
+    active: "note.md", split: { left: "note.md", right: "code.html", assignment: true },
+    livePreview: true, previewTarget: "code.html", previewCodeHidden: false,
+    sidebarVisible: true, terminalVisible: true, outlineVisible: false,
+  };
+  assert.deepEqual(savedLessonLayout(snapshot, tabs), snapshot);
+  const stale = savedLessonLayout({ ...snapshot, active: "../private", split: {left: "note.md", right: "missing.html"}, previewTarget: "note.md", script: "ignored" }, tabs);
+  assert.equal(stale.active, "");
+  assert.equal(stale.split, null);
+  assert.equal(stale.previewTarget, "");
+  assert.equal("script" in stale, false);
+  assert.equal(savedLessonLayout(null, tabs), null);
+  assert.deepEqual(savedLessonLayout({ ...snapshot, split: {left: "note.md", right: "", assignment: true}}, tabs).split, {left: "note.md", right: "", assignment: true});
 });

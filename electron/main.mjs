@@ -23,7 +23,7 @@ import { Terminals, installedShells } from "./terminals.mjs";
 import { searchWorkspace } from "./search.mjs";
 import { FileHistory } from "./history.mjs";
 import { selectionRoots } from "./selection.mjs";
-import { savedPosition } from "./session.mjs";
+import { savedPosition, savedLessonLayout } from "./session.mjs";
 import { createSpellcheck } from "./spellcheck.mjs";
 import { openInBrowser } from "./browser.mjs";
 import { randomUUID } from "node:crypto";
@@ -46,6 +46,7 @@ protocol.registerSchemesAsPrivileged([
   },
 ]);
 const defaults = {
+  interfaceLayout: "workbench",
   theme: "light",
   autosave: "afterDelay",
   autosaveDelay: 1500,
@@ -569,6 +570,7 @@ async function startApplication() {
         throw new Error("Invalid settings.");
       const next = { ...state.settings };
       for (const key of [
+        "interfaceLayout",
         "theme",
         "autosave",
         "attachmentMode",
@@ -609,6 +611,7 @@ async function startApplication() {
       )
         next.ignored = [...new Set([".git", ...update.ignored])];
       if (
+        !["workbench", "classic"].includes(next.interfaceLayout) ||
         !["light", "dark"].includes(next.theme) ||
         !["inherit", "light", "dark"].includes(next.presentationTheme) ||
         !["off", "afterDelay", "onBlur"].includes(next.autosave) ||
@@ -739,6 +742,7 @@ async function startApplication() {
       livePreview: saved.livePreview === true,
       previewRatio: Number.isFinite(saved.previewRatio) ? Math.max(20, Math.min(80, saved.previewRatio)) : 50,
       previewTarget: tabs.some((tab) => tab.path === saved.previewTarget && /\.(html?|php|phtml)$/i.test(tab.path)) ? saved.previewTarget : "",
+      lessonLayout: savedLessonLayout(saved.lessonLayout, tabs),
       savedAt: new Date().toISOString(),
     };
     await saveState();

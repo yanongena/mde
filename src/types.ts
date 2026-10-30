@@ -69,6 +69,7 @@ export interface EditorSplit {
   assignment?: boolean;
 }
 export interface Settings {
+  interfaceLayout: "workbench" | "classic";
   theme: "light" | "dark";
   autosave: "off" | "afterDelay" | "onBlur";
   autosaveDelay: number;
@@ -113,6 +114,17 @@ export interface SavedSession {
   livePreview?: boolean;
   previewTarget?: string;
   previewRatio?: number;
+  lessonLayout?: LessonLayout | null;
+}
+export interface LessonLayout {
+  active: string;
+  split: EditorSplit | null;
+  livePreview: boolean;
+  previewTarget: string;
+  previewCodeHidden: boolean;
+  sidebarVisible: boolean;
+  terminalVisible: boolean;
+  outlineVisible: boolean;
 }
 export interface OpenedWorkspace {
   root: string;
@@ -248,6 +260,7 @@ export interface MarginAPI {
       | "livePreview"
       | "previewTarget"
       | "previewRatio"
+      | "lessonLayout"
     >,
   ): Promise<void>;
   openRecovery(): Promise<void>;

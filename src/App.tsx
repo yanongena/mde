@@ -42,6 +42,8 @@ import {
   ListChecks,
   LoaderCircle,
   Presentation,
+  PanelsTopLeft,
+  ListTree,
 } from "lucide-react";
 import { MarkdownEditor } from "./editors/MarkdownEditor";
 import { CodeEditor } from "./editors/CodeEditor";
@@ -69,6 +71,7 @@ import { quickFiles, parseFileQuery, lineOffset } from "./lib/quick-open";
 import { ImagePreview } from "./components/ImagePreview";
 import { HtmlPreview } from "./components/HtmlPreview";
 import { LivePreview, supportsLivePreview } from "./components/LivePreview";
+import { LessonLayoutDialog } from "./components/LessonLayoutDialog";
 import { PreviewDivider } from "./components/PreviewDivider";
 import { MarkdownPreview } from "./components/MarkdownPreview";
 import {
@@ -98,6 +101,7 @@ import type {
   SearchMatch,
   SpellcheckInfo,
   EditorSplit,
+  LessonLayout,
 } from "./types";
 
 const PdfPreview = lazy(() => import("./components/PdfPreview"));
@@ -119,6 +123,7 @@ type DialogSpec = {
   resolve: (answer: string | null) => void;
 };
 const initialSettings: Settings = {
+  interfaceLayout: "workbench",
   theme: "light",
   autosave: "afterDelay",
   autosaveDelay: 1500,
@@ -183,6 +188,17 @@ export default function App() {
     splitRef.current = next;
     setSplitState(next);
   };
+  const [lessonLayout, setLessonLayoutState] = useState<LessonLayout | null>(
+    null,
+  );
+  const lessonLayoutRef = useRef(lessonLayout);
+  lessonLayoutRef.current = lessonLayout;
+  const setLessonLayout = (next: LessonLayout | null) => {
+    lessonLayoutRef.current = next;
+    setLessonLayoutState(next);
+  };
+  const [showLessonSetup, setShowLessonSetup] = useState(false);
+  const lessonButton = useRef<HTMLButtonElement>(null);
   const [livePreview, setLivePreview] = useState(false);
   const [previewCodeHidden, setPreviewCodeHidden] = useState(false);
   useEffect(() => {
@@ -439,6 +455,8 @@ export default function App() {
         position: savedPosition,
       };
       if (savedPosition) positions.current.set(doc.path, savedPosition);
+      if (replace)
+        remapLessonPaths((name) => (name === path ? doc.path : name));
       if (replace && splitRef.current) {
         const pair = splitRef.current;
         setSplit({
@@ -547,6 +565,7 @@ export default function App() {
         livePreview: livePreviewRef.current,
         previewTarget: previewTargetRef.current,
         previewRatio: previewRatioRef.current,
+        lessonLayout: lessonLayoutRef.current,
       });
     }
   };
@@ -555,6 +574,8 @@ export default function App() {
   };
 
   async function restore(opened: OpenedWorkspace) {
+    setLessonLayout(opened.session?.lessonLayout || null);
+    setShowLessonSetup(false);
     setPreviewCodeHidden(false);
     setPdfSource(null);
     navigationToken.current++;
@@ -687,6 +708,9 @@ export default function App() {
     document.documentElement.dataset.theme = displayTheme;
   }, [displayTheme]);
   useEffect(() => {
+    document.documentElement.dataset.interfaceLayout = settings.interfaceLayout;
+  }, [settings.interfaceLayout]);
+  useEffect(() => {
     if (message && !message.error) {
       const timer = setTimeout(() => setMessage(null), 5000);
       return () => clearTimeout(timer);
@@ -706,6 +730,7 @@ export default function App() {
     livePreview,
     previewTarget,
     previewRatio,
+    lessonLayout,
     navigationRevision,
   ]);
   useEffect(() => {
@@ -1060,6 +1085,87 @@ export default function App() {
     setActive(name);
     activeRef.current = name;
   }
+  function remapLessonPaths(map: (path: string) => string) {
+    const previous = lessonLayoutRef.current;
+    if (!previous) return;
+    setLessonLayout({
+      ...previous,
+      active: map(previous.active),
+      previewTarget: map(previous.previewTarget),
+      split: previous.split
+        ? {
+            ...previous.split,
+            left: map(previous.split.left),
+            right: map(previous.split.right),
+          }
+        : null,
+    });
+  }
+  async function restoreLessonLayout() {
+    const previous = lessonLayoutRef.current;
+    if (!previous) return;
+    capturePosition();
+    const has = (path: string) =>
+      tabsRef.current.some((tab) => tab.path === path);
+    const pair = previous.split;
+    const restoredSplit =
+      pair &&
+      has(pair.left) &&
+      (has(pair.right) || (pair.assignment && !pair.right))
+        ? pair
+        : null;
+    const restoredActive = has(previous.active)
+      ? previous.active
+      : restoredSplit?.right || restoredSplit?.left || activeRef.current;
+    setSplit(restoredSplit);
+    setPreviewTarget(has(previous.previewTarget) ? previous.previewTarget : "");
+    setLivePreview(previous.livePreview && has(previous.previewTarget));
+    setPreviewCodeHidden(previous.previewCodeHidden);
+    setShowOutline(previous.outlineVisible);
+    setActive(restoredActive);
+    activeRef.current = restoredActive;
+    setLessonLayout(null);
+    await updateSettings({
+      sidebarVisible: previous.sidebarVisible,
+      terminalVisible: previous.terminalVisible,
+    });
+    const mode = tabsRef.current.find(
+      (tab) => tab.path === restoredActive,
+    )?.mode;
+    if (!previous.terminalVisible)
+      requestAnimationFrame(() => {
+        if (mode) editorHandle(restoredActive, mode)?.focus?.();
+      });
+  }
+  async function applyLessonLayout(assignment: string, code: string) {
+    const previous: LessonLayout = {
+      active: activeRef.current,
+      split: splitRef.current ? { ...splitRef.current } : null,
+      livePreview: livePreviewRef.current,
+      previewTarget: previewTargetRef.current,
+      previewCodeHidden,
+      sidebarVisible: settingsRef.current.sidebarVisible,
+      terminalVisible: settingsRef.current.terminalVisible,
+      outlineVisible: showOutline,
+    };
+    if (!(await openFile(assignment, undefined, { preserveText: true })))
+      return;
+    if (
+      !(await openFile(code, undefined, { mode: "source", preserveText: true }))
+    )
+      return;
+    setSplit({ left: assignment, right: code, assignment: true });
+    setActive(code);
+    activeRef.current = code;
+    setPreviewTarget(code);
+    setLivePreview(true);
+    setPreviewCodeHidden(false);
+    setShowOutline(false);
+    setLessonLayout(previous);
+    setShowLessonSetup(false);
+    await updateSettings({ sidebarVisible: false, terminalVisible: false });
+    requestAnimationFrame(() => editorHandle(code, "source")?.focus?.());
+  }
   function toggleAssignment() {
     const pair = splitRef.current;
     if (pair?.assignment) {
@@ -1331,6 +1437,7 @@ export default function App() {
       [...positions.current].map(([path, position]) => [map(path), position]),
     );
     recentFiles.current = recentFiles.current.map(map);
+    remapLessonPaths(map);
     setPreviewTarget((name) => map(name));
     closedTabs.current = closedTabs.current.map((tab) => ({
       ...tab,
@@ -1832,6 +1939,7 @@ export default function App() {
         ]),
       );
       setPreviewTarget((name) => mapped(name, from, target));
+      remapLessonPaths((name) => mapped(name, from, target));
       recentFiles.current = recentFiles.current.map((path) =>
         mapped(path, from, target),
       );
@@ -2337,6 +2445,7 @@ export default function App() {
   const previewVisible = livePreview && !!previewTab;
   const codeHidden = previewVisible && previewCodeHidden;
   const presentation = settings.presentationMode;
+  const workbench = settings.interfaceLayout === "workbench";
   const editorSettings = presentation
     ? {
         ...settings,
@@ -2346,6 +2455,11 @@ export default function App() {
     : settings;
   const keyboard = platform === "darwin" ? "⌘" : "Ctrl";
   const commands = [
+    {
+      name: lessonLayout ? "Restore previous layout" : "Open lesson layout…",
+      run: () =>
+        lessonLayout ? restoreLessonLayout() : setShowLessonSetup(true),
+    },
     {
       name: presentation
         ? "Leave presentation mode"
@@ -2727,6 +2841,7 @@ export default function App() {
     <div
       className={
         "application" +
+        (workbench ? " workbench" : "") +
         (settings.focusMode || presentation ? " focus-mode" : "") +
         (presentation ? " presentation-mode" : "")
       }
@@ -3477,232 +3592,303 @@ export default function App() {
                 <Plus />
               </button>
             </div>
-            {current && supportsVisualMode(current.path) && (
-              <div
-                className="document-actions"
-                role="group"
-                aria-label="Writing"
-              >
+            <div
+              className="document-bar"
+              role="group"
+              aria-label="Document controls"
+            >
+              {workbench && current && (
+                <span className="document-location" data-tooltip={current.path}>
+                  {current.path}
+                </span>
+              )}
+              {current && supportsVisualMode(current.path) && (
                 <div
-                  className="mode-switch"
+                  className="document-actions"
                   role="group"
-                  aria-label="Editing mode"
+                  aria-label="Writing"
                 >
-                  <button
-                    aria-label="Visual mode"
-                    aria-pressed={current.mode === "visual"}
-                    className={current.mode === "visual" ? "active" : ""}
-                    onClick={() => {
-                      if (current.mode !== "visual") {
-                        setLivePreview(false);
-                        void toggleMode(current);
-                      }
-                    }}
+                  <div
+                    className="mode-switch"
+                    role="group"
+                    aria-label="Editing mode"
                   >
-                    {previewType(current.path) ||
-                    (isMarkdown(current.path) &&
-                      visualProtection(current.text)) ? (
-                      <Eye size={13} />
-                    ) : (
-                      <PenLine size={13} />
-                    )}{" "}
-                    Visual
-                  </button>
-                  <button
-                    aria-label={`${previewType(current.path) ?? "Markdown"} source mode`}
-                    aria-pressed={current.mode === "source"}
-                    className={current.mode === "source" ? "active" : ""}
-                    onClick={() => {
-                      if (current.mode !== "source") void toggleMode(current);
-                    }}
-                  >
-                    <Code2 size={14} /> Source
-                  </button>
+                    <button
+                      aria-label="Visual mode"
+                      aria-pressed={current.mode === "visual"}
+                      className={current.mode === "visual" ? "active" : ""}
+                      onClick={() => {
+                        if (current.mode !== "visual") {
+                          setLivePreview(false);
+                          void toggleMode(current);
+                        }
+                      }}
+                    >
+                      {previewType(current.path) ||
+                      (isMarkdown(current.path) &&
+                        visualProtection(current.text)) ? (
+                        <Eye size={13} />
+                      ) : (
+                        <PenLine size={13} />
+                      )}{" "}
+                      Visual
+                    </button>
+                    <button
+                      aria-label={`${previewType(current.path) ?? "Markdown"} source mode`}
+                      aria-pressed={current.mode === "source"}
+                      className={current.mode === "source" ? "active" : ""}
+                      onClick={() => {
+                        if (current.mode !== "source") void toggleMode(current);
+                      }}
+                    >
+                      <Code2 size={14} /> Source
+                    </button>
+                  </div>
                 </div>
-              </div>
-            )}
-            {(split?.assignment ||
-              (current &&
-                (isMarkdown(current.path) || isPDF(current.path)))) && (
+              )}
+              {(split?.assignment ||
+                (current &&
+                  (isMarkdown(current.path) || isPDF(current.path)))) && (
+                <button
+                  className="teaching-action"
+                  aria-label={
+                    split?.assignment ? "Unpin assignment" : "Pin assignment"
+                  }
+                  aria-pressed={!!split?.assignment}
+                  data-tooltip={
+                    split?.assignment
+                      ? "Unpin assignment"
+                      : "Keep this assignment on the left"
+                  }
+                  onClick={toggleAssignment}
+                >
+                  <Pin size={14} />
+                  <span>{split?.assignment ? "Unpin" : "Pin assignment"}</span>
+                </button>
+              )}
+              {(livePreview ||
+                (current && supportsLivePreview(current.path))) && (
+                <button
+                  className="teaching-action"
+                  aria-label={
+                    livePreview
+                      ? "Hide live preview"
+                      : "Show live preview beside code"
+                  }
+                  aria-pressed={livePreview}
+                  onClick={() => void toggleLivePreview()}
+                >
+                  <Eye size={14} />
+                  <span>Preview</span>
+                </button>
+              )}
+              {workbench && (
+                <>
+                  <button
+                    className="outline-toggle"
+                    aria-label={
+                      showOutline
+                        ? "Hide document outline"
+                        : "Show document outline"
+                    }
+                    aria-pressed={showOutline}
+                    disabled={
+                      !current || isReadOnlyPreview(current.path) || codeHidden
+                    }
+                    onClick={() => setShowOutline(!showOutline)}
+                  >
+                    <ListTree size={15} />
+                    <span>Outline</span>
+                  </button>
+                  <button
+                    ref={lessonButton}
+                    className="lesson-layout-button"
+                    aria-label={
+                      lessonLayout ? "Restore previous layout" : "Lesson layout"
+                    }
+                    aria-pressed={!!lessonLayout}
+                    disabled={!root}
+                    onClick={() =>
+                      lessonLayout
+                        ? void restoreLessonLayout()
+                        : setShowLessonSetup(true)
+                    }
+                  >
+                    <PanelsTopLeft size={15} />
+                    <span>
+                      {lessonLayout ? "Restore layout" : "Lesson layout"}
+                    </span>
+                  </button>
+                </>
+              )}
               <button
-                className="teaching-action"
-                aria-label={
-                  split?.assignment ? "Unpin assignment" : "Pin assignment"
-                }
-                aria-pressed={!!split?.assignment}
-                data-tooltip={
-                  split?.assignment
-                    ? "Unpin assignment"
-                    : "Keep this assignment on the left"
-                }
-                onClick={toggleAssignment}
+                className="view-menu-button"
+                aria-label="View options"
+                aria-haspopup="menu"
+                onClick={(event) => {
+                  const button = event.currentTarget;
+                  const rect = button.getBoundingClientRect();
+                  openMenu({
+                    x: rect.left,
+                    y: rect.bottom + 4,
+                    restoreFocus: () => button.focus(),
+                    items: [
+                      {
+                        label: split ? "Close split view" : "Split editor",
+                        disabled: !current,
+                        run: () => (split ? setSplit(null) : openBeside()),
+                      },
+                      {
+                        label: showOutline ? "Hide outline" : "Show outline",
+                        disabled: !root || (!!current && isPDF(current.path)),
+                        run: () => setShowOutline(!showOutline),
+                      },
+                      ...(workbench
+                        ? [
+                            {
+                              label: lessonLayout
+                                ? "Restore previous layout"
+                                : "Open lesson layout…",
+                              disabled: !root,
+                              run: () =>
+                                lessonLayout
+                                  ? restoreLessonLayout()
+                                  : setShowLessonSetup(true),
+                            },
+                          ]
+                        : []),
+                      null,
+                      {
+                        label: settings.focusMode
+                          ? "Leave focus mode"
+                          : "Enter focus mode",
+                        run: () =>
+                          updateSettings({ focusMode: !settings.focusMode }),
+                      },
+                      {
+                        label: `Switch to ${settings.theme === "light" ? "dark" : "light"} theme`,
+                        run: () =>
+                          updateSettings({
+                            theme:
+                              settings.theme === "light" ? "dark" : "light",
+                          }),
+                      },
+                    ],
+                  });
+                }}
               >
-                <Pin size={14} />
-                <span>{split?.assignment ? "Unpin" : "Pin assignment"}</span>
+                View <ChevronDown size={12} />
               </button>
-            )}
-            {(livePreview ||
-              (current && supportsLivePreview(current.path))) && (
               <button
-                className="teaching-action"
-                aria-label={
-                  livePreview
-                    ? "Hide live preview"
-                    : "Show live preview beside code"
+                className="document-menu-button"
+                aria-label="Document actions"
+                data-tooltip="Document actions"
+                aria-haspopup="menu"
+                disabled={
+                  reopeningClosed || (!root && !closedTabs.current.length)
                 }
-                aria-pressed={livePreview}
-                onClick={() => void toggleLivePreview()}
+                onClick={(event) => {
+                  const button = event.currentTarget;
+                  const rect = button.getBoundingClientRect();
+                  openMenu({
+                    x: rect.left,
+                    y: rect.bottom + 4,
+                    restoreFocus: () => button.focus(),
+                    items: [
+                      ...(current
+                        ? [
+                            {
+                              label: "Save file",
+                              shortcut: `${keyboard}+S`,
+                              disabled: isReadOnlyPreview(current.path),
+                              run: () => saveTab(current.path),
+                            },
+                            {
+                              label: "Save all files",
+                              shortcut: `${keyboard}+Shift+S`,
+                              run: () => saveAll(),
+                            },
+                          ]
+                        : []),
+                      ...(current && !isReadOnlyPreview(current.path)
+                        ? [
+                            {
+                              label: "Save as…",
+                              run: () => saveAs(current.path, false),
+                            },
+                            {
+                              label: "Save a copy…",
+                              run: () => saveAs(current.path, true),
+                            },
+                            null,
+                          ]
+                        : []),
+                      ...(current &&
+                      current.mode === "source" &&
+                      supportsFormatting(current.path)
+                        ? [
+                            {
+                              label: "Format document",
+                              shortcut: "Shift+Alt+F",
+                              disabled:
+                                formatState.path === current.path &&
+                                formatState.busy,
+                              run: () =>
+                                window.dispatchEvent(
+                                  new CustomEvent("margin:format-document", {
+                                    detail: { path: current.path },
+                                  }),
+                                ),
+                            },
+                            null,
+                          ]
+                        : []),
+                      ...(current && !isReadOnlyPreview(current.path)
+                        ? [
+                            ...(isMarkdown(current.path)
+                              ? [
+                                  {
+                                    label: "Export to PDF…",
+                                    run: () =>
+                                      setPdfSource({
+                                        path: current.path,
+                                        directory: false,
+                                        label: current.path,
+                                      }),
+                                  },
+                                ]
+                              : []),
+                            {
+                              label: "Local version history",
+                              run: () => showHistory(current.path),
+                            },
+                          ]
+                        : []),
+                      {
+                        label: "Compare files",
+                        disabled: !root,
+                        run: () => compareFiles(),
+                      },
+                      null,
+                      {
+                        label: "Reopen closed tab",
+                        shortcut: keyboard + "+Shift+T",
+                        disabled: !closedTabs.current.length,
+                        run: () => reopenClosed(),
+                      },
+                    ],
+                  });
+                }}
               >
-                <Eye size={14} />
-                <span>Preview</span>
+                {workbench ? (
+                  <>
+                    Document <ChevronDown size={12} />
+                  </>
+                ) : (
+                  <MoreHorizontal size={16} />
+                )}
               </button>
-            )}
-            <button
-              className="view-menu-button"
-              aria-label="View options"
-              aria-haspopup="menu"
-              onClick={(event) => {
-                const button = event.currentTarget;
-                const rect = button.getBoundingClientRect();
-                openMenu({
-                  x: rect.left,
-                  y: rect.bottom + 4,
-                  restoreFocus: () => button.focus(),
-                  items: [
-                    {
-                      label: split ? "Close split view" : "Split editor",
-                      disabled: !current,
-                      run: () => (split ? setSplit(null) : openBeside()),
-                    },
-                    {
-                      label: showOutline ? "Hide outline" : "Show outline",
-                      disabled: !root || (!!current && isPDF(current.path)),
-                      run: () => setShowOutline(!showOutline),
-                    },
-                    null,
-                    {
-                      label: settings.focusMode
-                        ? "Leave focus mode"
-                        : "Enter focus mode",
-                      run: () =>
-                        updateSettings({ focusMode: !settings.focusMode }),
-                    },
-                    {
-                      label: `Switch to ${settings.theme === "light" ? "dark" : "light"} theme`,
-                      run: () =>
-                        updateSettings({
-                          theme: settings.theme === "light" ? "dark" : "light",
-                        }),
-                    },
-                  ],
-                });
-              }}
-            >
-              View <ChevronDown size={12} />
-            </button>
-            <button
-              className="document-menu-button"
-              aria-label="Document actions"
-              data-tooltip="Document actions"
-              aria-haspopup="menu"
-              disabled={
-                reopeningClosed || (!root && !closedTabs.current.length)
-              }
-              onClick={(event) => {
-                const button = event.currentTarget;
-                const rect = button.getBoundingClientRect();
-                openMenu({
-                  x: rect.left,
-                  y: rect.bottom + 4,
-                  restoreFocus: () => button.focus(),
-                  items: [
-                    ...(current
-                      ? [
-                          {
-                            label: "Save file",
-                            shortcut: `${keyboard}+S`,
-                            disabled: isReadOnlyPreview(current.path),
-                            run: () => saveTab(current.path),
-                          },
-                          {
-                            label: "Save all files",
-                            shortcut: `${keyboard}+Shift+S`,
-                            run: () => saveAll(),
-                          },
-                        ]
-                      : []),
-                    ...(current && !isReadOnlyPreview(current.path)
-                      ? [
-                          {
-                            label: "Save as…",
-                            run: () => saveAs(current.path, false),
-                          },
-                          {
-                            label: "Save a copy…",
-                            run: () => saveAs(current.path, true),
-                          },
-                          null,
-                        ]
-                      : []),
-                    ...(current &&
-                    current.mode === "source" &&
-                    supportsFormatting(current.path)
-                      ? [
-                          {
-                            label: "Format document",
-                            shortcut: "Shift+Alt+F",
-                            disabled:
-                              formatState.path === current.path &&
-                              formatState.busy,
-                            run: () =>
-                              window.dispatchEvent(
-                                new CustomEvent("margin:format-document", {
-                                  detail: { path: current.path },
-                                }),
-                              ),
-                          },
-                          null,
-                        ]
-                      : []),
-                    ...(current && !isReadOnlyPreview(current.path)
-                      ? [
-                          ...(isMarkdown(current.path)
-                            ? [
-                                {
-                                  label: "Export to PDF…",
-                                  run: () =>
-                                    setPdfSource({
-                                      path: current.path,
-                                      directory: false,
-                                      label: current.path,
-                                    }),
-                                },
-                              ]
-                            : []),
-                          {
-                            label: "Local version history",
-                            run: () => showHistory(current.path),
-                          },
-                        ]
-                      : []),
-                    {
-                      label: "Compare files",
-                      disabled: !root,
-                      run: () => compareFiles(),
-                    },
-                    null,
-                    {
-                      label: "Reopen closed tab",
-                      shortcut: keyboard + "+Shift+T",
-                      disabled: !closedTabs.current.length,
-                      run: () => reopenClosed(),
-                    },
-                  ],
-                });
-              }}
-            >
-              <MoreHorizontal size={16} />
-            </button>
+            </div>
           </div>
           {recovery.length > 0 && (
             <div className="recovery-banner">
@@ -3860,6 +4046,7 @@ export default function App() {
                   />
                 ) : isMarkdown(tab.path) && tab.mode === "visual" ? (
                   <MarkdownEditor
+                    workbench={workbench}
                     path={tab.path}
                     text={tab.text}
                     onChange={(text) => edit(tab.path, text)}
@@ -4419,6 +4606,31 @@ export default function App() {
             );
             setHistoryPath("");
             notify("Version restored to the editor. Save to update the file.");
+          }}
+        />
+      )}
+      {showLessonSetup && (
+        <LessonLayoutDialog
+          entries={entries}
+          assignment={
+            split?.assignment
+              ? split.left
+              : isMarkdown(active) || isPDF(active)
+                ? active
+                : ""
+          }
+          code={supportsLivePreview(active) ? active : previewTarget}
+          onApply={applyLessonLayout}
+          onClose={() => {
+            setShowLessonSetup(false);
+            requestAnimationFrame(() => {
+              const button = lessonButton.current;
+              if (button?.getClientRects().length) button.focus();
+              else
+                appRef.current
+                  ?.querySelector<HTMLButtonElement>(".view-menu-button")
+                  ?.focus();
+            });
           }}
         />
       )}

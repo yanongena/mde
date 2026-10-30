@@ -10,8 +10,9 @@ export const preferenceCategories: {
     id: "editing",
     title: "Appearance & editing",
     keywords:
-      "automatically format code on open color theme daylight light nightfall dark font size reading line height text width indentation spaces",
+      "interface layout workbench classic trial automatically format code on open color theme daylight light nightfall dark font size reading line height text width indentation spaces",
     keys: [
+      "interfaceLayout",
       "theme",
       "formatOnOpen",
       "fontSize",

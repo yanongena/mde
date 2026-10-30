@@ -128,6 +128,26 @@ export function PreferencesDialog({
           <div className="settings-section" hidden={!visible.has("editing")}>
             <h3>Appearance & editing</h3>
             <label>
+              Interface layout
+              <select
+                aria-label="Interface layout"
+                value={settings.interfaceLayout}
+                onChange={(event) =>
+                  void updateSettings({
+                    interfaceLayout: event.target
+                      .value as Settings["interfaceLayout"],
+                  })
+                }
+              >
+                <option value="workbench">Workbench · compact</option>
+                <option value="classic">Classic · original layout</option>
+              </select>
+            </label>
+            <p>
+              Switch layouts while keeping your open documents, edits and
+              panels.
+            </p>
+            <label>
               Automatically format code on open
               <input
                 type="checkbox"

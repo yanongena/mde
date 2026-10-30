@@ -35,6 +35,8 @@ import {
   IndentDecrease,
   X,
   Search,
+  ChevronDown,
+  MoreHorizontal,
 } from "lucide-react";
 import { assetURL, splitMetadata, resolveLink } from "../lib/markdown";
 import type {
@@ -74,6 +76,7 @@ import {
 
 const lowlight = createLowlight(common);
 interface Props {
+  workbench?: boolean;
   path: string;
   text: string;
   onChange(text: string): void;
@@ -87,6 +90,7 @@ interface Props {
   spellcheck: SpellcheckInfo | null;
 }
 export function MarkdownEditor({
+  workbench = false,
   path,
   text,
   onChange,
@@ -99,6 +103,7 @@ export function MarkdownEditor({
   tabs = [],
   spellcheck,
 }: Props) {
+  const toolbar = useRef<HTMLDivElement>(null);
   const spelling = useRef({ info: spellcheck, visible });
   spelling.current = { info: spellcheck, visible };
   const { openMenu } = useContextMenu();
@@ -554,6 +559,14 @@ export function MarkdownEditor({
       editorHandle(path, "visual")?.restore(position, active),
     );
   }, [editor, path, active, visible, position]);
+  useLayoutEffect(() => {
+    const controls = toolbar.current?.querySelectorAll<
+      HTMLButtonElement | HTMLSelectElement
+    >("button, select");
+    controls?.forEach((control, index) => {
+      control.tabIndex = index === 0 ? 0 : -1;
+    });
+  }, [editor, workbench]);
   if (!editor) return null;
   const slashMenu = (
     <SlashMenu
@@ -602,6 +615,147 @@ export function MarkdownEditor({
       {icon}
     </button>
   );
+  const marks = [
+    {
+      label: "Bold (Ctrl+B)",
+      icon: <Bold />,
+      run: () => editor.chain().focus().toggleBold().run(),
+      active: editor.isActive("bold"),
+    },
+    {
+      label: "Italic (Ctrl+I)",
+      icon: <Italic />,
+      run: () => editor.chain().focus().toggleItalic().run(),
+      active: editor.isActive("italic"),
+    },
+    {
+      label: "Strikethrough",
+      icon: <Strikethrough />,
+      run: () => editor.chain().focus().toggleStrike().run(),
+      active: editor.isActive("strike"),
+    },
+    {
+      label: "Inline code",
+      icon: <Code />,
+      run: () => editor.chain().focus().toggleCode().run(),
+      active: editor.isActive("code"),
+    },
+  ];
+  const blocks = [
+    {
+      label: "Bullet list",
+      icon: <List />,
+      run: () => editor.chain().focus().toggleBulletList().run(),
+      active: editor.isActive("bulletList"),
+    },
+    {
+      label: "Numbered list",
+      icon: <ListOrdered />,
+      run: () => editor.chain().focus().toggleOrderedList().run(),
+      active: editor.isActive("orderedList"),
+    },
+    {
+      label: "Checklist",
+      icon: <ListChecks />,
+      run: () => editor.chain().focus().toggleTaskList().run(),
+      active: editor.isActive("taskList"),
+    },
+    {
+      label: "Blockquote",
+      icon: <Quote />,
+      run: () => editor.chain().focus().toggleBlockquote().run(),
+      active: editor.isActive("blockquote"),
+    },
+  ];
+  const link = {
+    label: "Edit link (Ctrl+K)",
+    icon: <Link />,
+    active: editor.isActive("link"),
+    run: () => {
+      setLinkValue(editor.getAttributes("link").href || "");
+      linkSelection.current = {
+        from: editor.state.selection.from,
+        to: editor.state.selection.to,
+      };
+      setLinkDialog(true);
+    },
+  };
+  const inserts = [
+    {
+      label: "Insert image",
+      icon: <ImagePlus />,
+      run: () => insertAttachment(window.margin.selectImage(path)),
+    },
+    {
+      label: "Insert table",
+      icon: <Table2 />,
+      run: () =>
+        editor
+          .chain()
+          .focus()
+          .insertTable({ rows: 3, cols: 3, withHeaderRow: true })
+          .run(),
+    },
+    {
+      label: "Code block",
+      icon: <SquareCode />,
+      run: () => editor.chain().focus().toggleCodeBlock().run(),
+      active: editor.isActive("codeBlock"),
+    },
+    {
+      label: "Horizontal rule",
+      icon: <Minus />,
+      run: () => editor.chain().focus().setHorizontalRule().run(),
+    },
+  ];
+  type ToolbarAction = {
+    label: string;
+    icon: React.ReactNode;
+    run(): unknown;
+    active?: boolean;
+  };
+  const buttons = (items: ToolbarAction[]) =>
+    items.map((item) => (
+      <span className="format-action" key={item.label}>
+        {action(item.label, item.icon, item.run, item.active)}
+      </span>
+    ));
+  const menu = (
+    label: string,
+    icon: React.ReactNode,
+    items: ToolbarAction[],
+  ) => (
+    <button
+      type="button"
+      className="format-menu-button"
+      aria-label={label}
+      aria-haspopup="menu"
+      onMouseDown={(event) => event.preventDefault()}
+      onClick={(event) => {
+        const button = event.currentTarget,
+          rect = button.getBoundingClientRect();
+        openMenu({
+          x: rect.left,
+          y: rect.bottom + 4,
+          restoreFocus: () => button.focus(),
+          items: items.map((item) => ({
+            label: item.label,
+            run: () => {
+              editor.view.focus();
+              item.run();
+            },
+          })),
+        });
+      }}
+    >
+      {icon}
+      {label === "Insert" && (
+        <>
+          Insert <ChevronDown size={12} />
+        </>
+      )}
+    </button>
+  );
   return (
     <div className="markdown-editor">
       {slashMenu}
@@ -610,6 +764,49 @@ export function MarkdownEditor({
         className="format-toolbar"
         role="toolbar"
         aria-label="Markdown formatting"
+        ref={toolbar}
+        onFocusCapture={(event) => {
+          toolbar.current
+            ?.querySelectorAll<HTMLButtonElement | HTMLSelectElement>(
+              "button, select",
+            )
+            .forEach((control) => {
+              control.tabIndex =
+                control === (event.target as HTMLElement) ? 0 : -1;
+            });
+        }}
+        onKeyDown={(event) => {
+          if (
+            event.altKey ||
+            event.metaKey ||
+            event.ctrlKey ||
+            !["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)
+          )
+            return;
+          if (
+            event.target instanceof HTMLSelectElement &&
+            ["Home", "End"].includes(event.key)
+          )
+            return;
+          const controls = Array.from(
+            toolbar.current!.querySelectorAll<
+              HTMLButtonElement | HTMLSelectElement
+            >("button:not(:disabled), select:not(:disabled)"),
+          );
+          const index = controls.indexOf(event.target as HTMLButtonElement);
+          if (index < 0) return;
+          event.preventDefault();
+          const next =
+            event.key === "Home"
+              ? 0
+              : event.key === "End"
+                ? controls.length - 1
+                : (index +
+                    (event.key === "ArrowRight" ? 1 : -1) +
+                    controls.length) %
+                  controls.length;
+          controls[next]?.focus();
+        }}
       >
         <select
           aria-label="Text style"
@@ -637,89 +834,27 @@ export function MarkdownEditor({
             </option>
           ))}
         </select>
-        <i />
-        {action(
-          "Bold (Ctrl+B)",
-          <Bold />,
-          () => editor.chain().focus().toggleBold().run(),
-          editor.isActive("bold"),
+        <i aria-hidden="true" />
+        {buttons(workbench ? marks.slice(0, 2) : marks)}
+        {!workbench && (
+          <>
+            <i aria-hidden="true" />
+            {buttons(blocks)}
+            <i aria-hidden="true" />
+          </>
         )}
-        {action(
-          "Italic (Ctrl+I)",
-          <Italic />,
-          () => editor.chain().focus().toggleItalic().run(),
-          editor.isActive("italic"),
-        )}
-        {action(
-          "Strikethrough",
-          <Strikethrough />,
-          () => editor.chain().focus().toggleStrike().run(),
-          editor.isActive("strike"),
-        )}
-        {action(
-          "Inline code",
-          <Code />,
-          () => editor.chain().focus().toggleCode().run(),
-          editor.isActive("code"),
-        )}
-        <i />
-        {action(
-          "Bullet list",
-          <List />,
-          () => editor.chain().focus().toggleBulletList().run(),
-          editor.isActive("bulletList"),
-        )}
-        {action(
-          "Numbered list",
-          <ListOrdered />,
-          () => editor.chain().focus().toggleOrderedList().run(),
-          editor.isActive("orderedList"),
-        )}
-        {action(
-          "Checklist",
-          <ListChecks />,
-          () => editor.chain().focus().toggleTaskList().run(),
-          editor.isActive("taskList"),
-        )}
-        {action(
-          "Blockquote",
-          <Quote />,
-          () => editor.chain().focus().toggleBlockquote().run(),
-          editor.isActive("blockquote"),
-        )}
-        <i />
-        {action(
-          "Edit link (Ctrl+K)",
-          <Link />,
-          () => {
-            setLinkValue(editor.getAttributes("link").href || "");
-            if (editor)
-              linkSelection.current = {
-                from: editor.state.selection.from,
-                to: editor.state.selection.to,
-              };
-            setLinkDialog(true);
-          },
-          editor.isActive("link"),
-        )}
-        {action("Insert image", <ImagePlus />, () =>
-          insertAttachment(window.margin.selectImage(path)),
-        )}
-        {action("Insert table", <Table2 />, () =>
-          editor
-            .chain()
-            .focus()
-            .insertTable({ rows: 3, cols: 3, withHeaderRow: true })
-            .run(),
-        )}
-        {action(
-          "Code block",
-          <SquareCode />,
-          () => editor.chain().focus().toggleCodeBlock().run(),
-          editor.isActive("codeBlock"),
-        )}
-        {action("Horizontal rule", <Minus />, () =>
-          editor.chain().focus().setHorizontalRule().run(),
+        {buttons([link])}
+        {workbench ? (
+          <>
+            {menu("Insert", <Plus size={15} />, [...blocks, ...inserts])}
+            {menu(
+              "More formatting",
+              <MoreHorizontal size={16} />,
+              marks.slice(2),
+            )}
+          </>
+        ) : (
+          buttons(inserts)
         )}
         <span className="toolbar-spacer" />
         {action("Find in document", <Search />, () =>

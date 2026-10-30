@@ -25,6 +25,14 @@ async function documentAction(name) {
   await page.getByRole("menuitem", {name, exact: true}).click();
 }
 
+async function formatAction(name) {
+  const direct = page.locator(".editor-pane.active .format-toolbar").getByRole("button", { name, exact: true });
+  if (await direct.isVisible()) return direct.click();
+  const menu = ["Strikethrough", "Inline code"].includes(name) ? "More formatting" : "Insert";
+  await page.locator(".editor-pane.active .format-toolbar").getByRole("button", { name: menu, exact: true }).click();
+  await page.getByRole("menuitem", { name, exact: true }).click();
+}
+
 async function viewAction(name) {
   await page.getByRole("button", { name: "View options", exact: true }).click();
   await page.getByRole("menuitem", { name, exact: true }).click();
@@ -71,7 +79,7 @@ async function move(from, to) {
     page.getByRole("treeitem", { name: to, exact: true }),
   ).toBeVisible();
 }
-async function launch(devURL, presentation = false) {
+async function launch(devURL, presentation = false, explorer = true) {
   const env = {
     ...process.env,
     MARGIN_DATA_PATH: data,
@@ -95,6 +103,7 @@ async function launch(devURL, presentation = false) {
   errors = [];
   page.on("pageerror", (error) => errors.push(error.message));
   if (presentation) await expect(page.locator(".application.presentation-mode")).toBeVisible();
+  else if (!explorer) await expect(page.locator(".editor-tab.active")).toBeVisible();
   else await expect(
     page.getByRole("treeitem", { name: "notes/welcome.md", exact: true }),
   ).toBeVisible();
@@ -825,13 +834,13 @@ test("visual authoring, tables, formatting, undo, source mode and repeated seria
     .click();
   await page.keyboard.insertText(" on paper.");
   await page.keyboard.press("Enter");
-  await page.getByRole("button", { name: "Checklist", exact: true }).click();
+  await formatAction("Checklist");
   await page.keyboard.insertText("Ship the first draft");
   await page.keyboard.press("Enter");
   await page.keyboard.insertText("Read it again");
   await page.keyboard.press("Enter");
   await page.keyboard.press("Enter");
-  await page.getByRole("button", { name: "Insert table", exact: true }).click();
+  await formatAction("Insert table");
   await expect(rich.locator("table")).toBeVisible();
   await rich.locator("th").first().click();
   await page.keyboard.insertText("Topic");
@@ -849,7 +858,7 @@ test("visual authoring, tables, formatting, undo, source mode and repeated seria
   await page.keyboard.press("ArrowDown");
   await page.keyboard.press("ArrowDown");
   await page.keyboard.press("ArrowDown");
-  await page.getByRole("button", { name: "Code block", exact: true }).click();
+  await formatAction("Code block");
   await page.keyboard.insertText('print("Hello from Margin")');
   if (await page.getByLabel("Code block language", { exact: true }).isVisible())
     await page
@@ -1201,14 +1210,14 @@ test("heading levels, inline marks, nested lists, blockquotes, links and rich-te
     ["Strikethrough", "retired words", "s"],
     ["Inline code", "inline_code", "code"],
   ]) {
-    await page.getByRole("button", { name: button, exact: true }).click();
+    await formatAction(button);
     await page.keyboard.insertText(text);
-    await page.getByRole("button", { name: button, exact: true }).click();
+    await formatAction(button);
     await page.keyboard.insertText(" ");
     await expect(rich.locator(tag)).toContainText(text);
   }
   await page.keyboard.press("Enter");
-  await page.getByRole("button", { name: "Bullet list", exact: true }).click();
+  await formatAction("Bullet list");
   await page.keyboard.insertText("Parent item");
   await page.keyboard.press("Enter");
   await page.keyboard.insertText("Nested item");
@@ -1219,14 +1228,12 @@ test("heading levels, inline marks, nested lists, blockquotes, links and rich-te
   await page.keyboard.press("Enter");
   await page.keyboard.press("Enter");
   await page.keyboard.press("Enter");
-  await page
-    .getByRole("button", { name: "Numbered list", exact: true })
-    .click();
+  await formatAction("Numbered list");
   await page.keyboard.insertText("Ordered item");
   await expect(rich.locator("ol")).toHaveCount(1);
   await page.keyboard.press("Enter");
   await page.keyboard.press("Enter");
-  await page.getByRole("button", { name: "Blockquote", exact: true }).click();
+  await formatAction("Blockquote");
   await page.keyboard.insertText("A sentence to remember.");
   await expect(rich.locator("blockquote")).toContainText("A sentence");
   await page.keyboard.press("Enter");
@@ -1246,9 +1253,7 @@ test("heading levels, inline marks, nested lists, blockquotes, links and rich-te
   );
   await page.keyboard.press("End");
   await page.keyboard.press("Enter");
-  await page
-    .getByRole("button", { name: "Horizontal rule", exact: true })
-    .click();
+  await formatAction("Horizontal rule");
   await expect(rich.locator("hr")).toHaveCount(1);
   await app.evaluate(async ({ clipboard, ClipboardItem }) => {
     await clipboard.write([
@@ -1313,7 +1318,7 @@ test("image chooser, image drag/drop, attachment preferences and explorer drag/d
     },
     path.join(base, "reference.png"),
   );
-  await page.getByRole("button", { name: "Insert image", exact: true }).click();
+  await formatAction("Insert image");
   await expect(page.locator(".editor-pane.active img[src]")).toHaveCount(1);
   await expect.poll(() => fs.readdir(file("notes/images"))).toHaveLength(1);
   await page
@@ -1683,6 +1688,9 @@ test("compact editor keeps actions in tabs and tooltips appear promptly", async 
 
 test("decluttered toolbar keeps two rows, keyboard menus and active-file status in compact windows", async () => {
   await page.getByRole("button", { name: "Preferences", exact: true }).click();
+  await page.getByLabel("Interface layout", { exact: true }).selectOption("classic");
+  await page.getByRole("button", { name: "Close preferences" }).click();
+  await page.getByRole("button", { name: "Preferences", exact: true }).click();
   await page.getByLabel("Automatically format code on open", { exact: true }).uncheck();
   await page.getByRole("button", { name: "Close preferences" }).click();
   await open("src/example.html");
@@ -1860,6 +1868,8 @@ test("format worker never overwrites edits made while formatting", async () => {
   ).toBeVisible();
   await open("large.js");
   await sourceFill("const typedByUser = 42;");
+  // Menu entries are a snapshot. Wait on the live status before opening the menu.
+  await expect(page.locator(".status-bar")).not.toContainText("Formatting…");
   await page.getByRole("button", { name: "Document actions", exact: true }).click();
   await expect(page.getByRole("menuitem", { name: "Format document", exact: true })).not.toBeDisabled();
   await page.keyboard.press("Escape");
@@ -5268,5 +5278,142 @@ test("UX clarity readable contrast, compact document actions and keyboard access
   await page
     .getByRole("button", { name: "Close history", exact: true })
     .click();
+  expect(errors).toEqual([]);
+});
+
+test("Workbench switches layouts without remounting dirty editors or live previews and remembers the choice", async () => {
+  await expect(page.locator(".application")).toHaveClass(/workbench/);
+  await open("src/example.html");
+  const original = await disk("src/example.html");
+  const edited = '<!doctype html>\n<html><body><h1>Workbench unsaved preview</h1></body></html>\n';
+  await sourceFill(edited);
+  await page.getByRole("button", {name: "Show live preview beside code", exact: true}).click();
+  const preview = page.frameLocator('.live-preview iframe');
+  await expect(preview.locator("h1")).toHaveText("Workbench unsaved preview");
+  await open("notes/welcome.md");
+  await page.getByRole("button", {name: "Pin assignment", exact: true}).click();
+  await expect(page.locator(".editor-area")).toHaveClass(/with-assignment/);
+  await page.locator('.editor-pane[data-path="src/example.html"] .cm-content').evaluate(element => { element.workbenchIdentity = "same editor"; });
+  await preview.locator("body").evaluate(element => { element.workbenchIdentity = "same preview"; });
+  for (const layout of ["classic", "workbench", "classic"]) {
+    await page.getByRole("button", {name: "Preferences", exact: true}).click();
+    await page.getByLabel("Interface layout", {exact: true}).selectOption(layout);
+    await page.getByRole("button", {name: "Close preferences", exact: true}).click();
+    await expect(page.locator("html")).toHaveAttribute("data-interface-layout", layout);
+    await expect(page.locator(".editor-pane.split-visible")).toHaveCount(2);
+    expect(await page.locator('.editor-pane[data-path="src/example.html"] .cm-content').evaluate(element => element.workbenchIdentity)).toBe("same editor");
+    expect(await preview.locator("body").evaluate(element => element.workbenchIdentity)).toBe("same preview");
+    await expect(page.locator('.editor-pane[data-path="src/example.html"] .cm-content')).toContainText("Workbench unsaved preview");
+    expect(await disk("src/example.html")).toBe(original);
+  }
+  const invalid = await page.evaluate(async () => { try { await window.margin.settings({interfaceLayout: "missing"}); return false; } catch { return true; } });
+  expect(invalid).toBe(true);
+  await expect.poll(async () => JSON.parse(await fs.readFile(path.join(data, "state.json"), "utf8")).settings.interfaceLayout).toBe("classic");
+  await expect.poll(async () => {
+    const session = JSON.parse(await fs.readFile(path.join(data, "state.json"), "utf8")).sessions[root];
+    return session?.split?.assignment && session?.livePreview && session?.tabs.some(tab => tab.path === "src/example.html" && tab.mode === "source" && tab.text.includes("Workbench unsaved preview"));
+  }).toBe(true);
+  await app.evaluate(({app}) => app.exit());
+  await app.close().catch(() => {});
+  await launch();
+  await expect(page.locator("html")).toHaveAttribute("data-interface-layout", "classic");
+  await expect(page.locator('.editor-pane[data-path="src/example.html"] .cm-content')).toContainText("Workbench unsaved preview");
+  await expect(page.frameLocator('.live-preview iframe').locator("h1")).toHaveText("Workbench unsaved preview");
+  expect(await disk("src/example.html")).toBe(original);
+  expect(errors).toEqual([]);
+});
+
+test("Workbench lesson layout preserves dirty buffers and the running terminal, then restores panels after restart", async () => {
+  await open("src/example.html");
+  const original = await disk("src/example.html");
+  const edited = '<html><body><h1>Lesson draft</h1></body></html>';
+  await sourceFill(edited);
+  await open("notes/welcome.md");
+  await toggleOutline();
+  await page.getByRole("button", {name: "Toggle terminal", exact: true}).click();
+  await page.getByRole("button", {name: "New terminal", exact: true}).click();
+  await expect(page.locator(".terminal-view.active .xterm-screen")).toBeVisible();
+  await page.locator(".terminal-view.active").evaluate(element => { element.workbenchIdentity = "original terminal"; });
+  await page.locator(".terminal-view.active .xterm-helper-textarea").focus();
+  await page.keyboard.type(process.platform === "win32" ? "Write-Output ('WORKBENCH_' + (6*7))" : "printf 'WORKBENCH_%s\\n' $((6*7))");
+  await page.keyboard.press("Enter");
+  await expect(page.locator(".terminal-view.active .xterm-rows")).toContainText("WORKBENCH_42");
+  await page.getByRole("button", {name: "Lesson layout", exact: true}).click();
+  const dialog = page.getByRole("dialog", {name: "Lesson layout", exact: true});
+  await dialog.getByLabel("Lesson assignment").selectOption("notes/welcome.md");
+  await dialog.getByLabel("Lesson code").selectOption("src/example.html");
+  await dialog.getByRole("button", {name: "Open lesson layout", exact: true}).click();
+  await expect(dialog).toHaveCount(0);
+  await expect(page.locator(".editor-pane.active .cm-content")).toBeFocused();
+  await expect(page.locator(".editor-area")).toHaveClass(/with-assignment/);
+  await expect(page.locator(".editor-pane.split-visible")).toHaveCount(2);
+  await expect(page.locator(".sidebar")).toHaveCount(0);
+  await expect(page.getByRole("complementary", {name: "Document outline", exact: true})).toHaveCount(0);
+  await expect(page.locator(".terminal-panel")).toBeHidden();
+  await expect(page.frameLocator('.live-preview iframe').locator("h1")).toHaveText("Lesson draft");
+  await page.screenshot({path: "test-results/workbench-lesson.png"});
+  await page.getByRole("button", {name: "Restore previous layout", exact: true}).click();
+  await expect(page.locator(".sidebar")).toBeVisible();
+  await expect(page.locator(".terminal-view.active .xterm-helper-textarea")).toBeFocused();
+  await expect(page.getByRole("complementary", {name: "Document outline", exact: true})).toBeVisible();
+  await expect(page.locator(".terminal-view.active .xterm-screen")).toBeVisible();
+  // Hiding the terminal for the preset must not terminate or recreate its shell/view.
+  expect(await page.locator(".terminal-view.active").evaluate(element => element.workbenchIdentity)).toBe("original terminal");
+  await expect(page.locator(".terminal-view.active .xterm-rows")).toContainText("WORKBENCH_42");
+  await expect(page.locator(".terminal-tabs > div")).toHaveCount(1);
+  await expect(page.locator(".editor-tab.active")).toHaveAttribute("data-tooltip", "notes/welcome.md");
+  await expect(page.locator(".editor-area")).not.toHaveClass(/split/);
+  await page.getByRole("button", {name: "Lesson layout", exact: true}).click();
+  await page.getByRole("button", {name: "Open lesson layout", exact: true}).click();
+  await expect.poll(async () => {
+    const session = JSON.parse(await fs.readFile(path.join(data, "state.json"), "utf8")).sessions[root];
+    return session?.lessonLayout?.active === "notes/welcome.md" && session?.livePreview && session?.active === "src/example.html";
+  }).toBe(true);
+  await app.evaluate(({app}) => app.exit());
+  await app.close().catch(() => {});
+  await launch(undefined, false, false);
+  await expect(page.getByRole("button", {name: "Restore previous layout", exact: true})).toBeVisible();
+  await expect(page.frameLocator('.live-preview iframe').locator("h1")).toHaveText("Lesson draft");
+  await page.getByRole("button", {name: "Restore previous layout", exact: true}).click();
+  await expect(page.locator(".sidebar")).toBeVisible();
+  await expect(page.getByRole("complementary", {name: "Document outline", exact: true})).toBeVisible();
+  await expect(page.locator(".editor-tab.active")).toHaveAttribute("data-tooltip", "notes/welcome.md");
+  await open("src/example.html");
+  await expect(page.locator(".editor-pane.active .cm-content")).toContainText("Lesson draft");
+  expect(await disk("src/example.html")).toBe(original);
+  expect(errors).toEqual([]);
+});
+
+test("Workbench compact chrome keeps labelled actions, toolbar keyboard access and usable targets in both themes", async () => {
+  await open("notes/welcome.md");
+  await app.evaluate(({BrowserWindow}) => BrowserWindow.getAllWindows()[0].setContentSize(820, 700));
+  const style = page.getByLabel("Text style", {exact: true});
+  await style.focus();
+  await page.keyboard.press("ArrowRight");
+  await expect(page.getByRole("button", {name: "Bold (Ctrl+B)", exact: true})).toBeFocused();
+  await page.keyboard.press("End");
+  await expect(page.locator(".format-toolbar").getByRole("button", {name: "Redo", exact: true})).toBeFocused();
+  const insert = page.getByRole("button", {name: "Insert", exact: true});
+  await insert.focus();
+  await page.keyboard.press("Enter");
+  for (const label of ["Bullet list", "Numbered list", "Checklist", "Blockquote", "Insert image", "Insert table", "Code block", "Horizontal rule"])
+    await expect(page.getByRole("menuitem", {name: label, exact: true})).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(insert).toBeFocused();
+  for (const theme of ["light", "dark"]) {
+    if (theme === "dark") await toggleTheme();
+    for (const name of ["Document actions", "View options", "Pin assignment"])
+      await expect(page.getByRole("button", {name, exact: true})).toBeInViewport();
+    const geometry = await page.locator(".document-bar").evaluate(element => ({width: element.clientWidth, scroll: element.scrollWidth, targets:[...element.querySelectorAll("button")].filter(button => button.getClientRects().length).map(button => ({w:button.getBoundingClientRect().width,h:button.getBoundingClientRect().height}))}));
+    expect(geometry.scroll).toBeLessThanOrEqual(geometry.width);
+    for (const target of geometry.targets) { expect(target.w).toBeGreaterThanOrEqual(24); expect(target.h).toBeGreaterThanOrEqual(24); }
+    await page.screenshot({path: `test-results/workbench-compact-${theme}.png`});
+  }
+  await page.getByRole("button", {name: "View options", exact: true}).click();
+  await expect(page.getByRole("menuitem", {name: "Show outline", exact: true})).toBeVisible();
+  await page.getByRole("menuitem", {name: "Open lesson layout…", exact: true}).click();
+  await page.keyboard.press("Escape");
+  await expect(page.getByRole("dialog", {name: "Lesson layout", exact: true})).toHaveCount(0);
+  await expect(page.getByRole("button", {name: "View options", exact: true})).toBeFocused();
   expect(errors).toEqual([]);
 });
