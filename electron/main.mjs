@@ -31,6 +31,10 @@ import { planPdfExport, exportPdf } from "./pdf-export.mjs";
 import { renderPdf } from "./pdf-window.mjs";
 import { readPdf } from "./pdf-files.mjs";
 import { PhpPreview } from "./php-preview.mjs";
+import { CodeIntelligence } from "./code-intelligence.mjs";
+import { PhpLanguageServer } from "./php-language-server.mjs";
+const phpLanguageServer = new PhpLanguageServer();
+let codeIntelligence;
 const phpPreview = new PhpPreview();
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -72,6 +76,11 @@ const defaults = {
   presentationMode: false,
   presentationFontSize: 24,
   presentationTheme: "inherit",
+  completionMode: "automatic",
+  presentationCompletionMode: "manual",
+  parameterHints: true,
+  phpLanguageServer: "off",
+  phpactorPath: "phpactor",
 };
 let history;
 let win,
@@ -122,7 +131,9 @@ async function openWorkspace(root) {
   await watcher?.close();
   clearTimeout(watcherTimer);
   await terminals.closeAll();
+  phpLanguageServer.useWorkspace(candidate);
   workspace = candidate;
+  codeIntelligence = new CodeIntelligence(candidate);
   state.workspace = resolved;
   state.recent = [
     resolved,
@@ -144,8 +155,11 @@ async function openWorkspace(root) {
     awaitWriteFinish: { stabilityThreshold: 150, pollInterval: 50 },
   });
   const changes = new Set();
-  watcher.on("all", (_kind, file) => {
-    changes.add(path.relative(resolved, file).replace(/\\/g, "/"));
+  watcher.on("all", (kind, file) => {
+    const changedPath = path.relative(resolved, file).replace(/\\/g, "/");
+    codeIntelligence?.invalidate([changedPath]);
+    if (["add", "change", "unlink"].includes(kind)) phpLanguageServer.changed([changedPath], kind);
+    changes.add(changedPath);
     clearTimeout(watcherTimer);
     watcherTimer = setTimeout(() => {
       send("workspace:changed", [...changes]);
@@ -284,6 +298,29 @@ async function startApplication() {
     return openWorkspace(root);
   });
   handle("workspace:tree", () => requireWorkspace().tree());
+  handle("code:project", async (request) => {
+    const current = requireWorkspace();
+    const result = await codeIntelligence.project(request);
+    if (current !== workspace) throw new Error("The workspace changed.");
+    return result;
+  });
+  handle("code:php-query", async (request) => {
+    const current = requireWorkspace();
+    if (state.settings.phpLanguageServer !== "phpactor") return { result: null, status: "off", message: "" };
+    try {
+      const result = await phpLanguageServer.query(current, state.settings.phpactorPath, request);
+      if (current !== workspace) return { result: null, status: "off", message: "" };
+      return { result, ...phpLanguageServer.info() };
+    } catch (error) {
+      return { result: null, ...phpLanguageServer.info(), message: error.message };
+    }
+  });
+  handle("code:php-status", async () => {
+    if (state.settings.phpLanguageServer === "phpactor") {
+      try { await phpLanguageServer.start(requireWorkspace(), state.settings.phpactorPath); } catch { /* Report startup errors in Preferences. */ }
+    }
+    return phpLanguageServer.info();
+  });
   function pdfDestination(request) {
     if (!request.destination) return undefined;
     const directory = pdfDestinations.get(request.destination);
@@ -577,6 +614,10 @@ async function startApplication() {
         "attachmentFolder",
         "spellcheckLanguage",
         "presentationTheme",
+        "completionMode",
+        "presentationCompletionMode",
+        "phpLanguageServer",
+        "phpactorPath",
       ])
         if (typeof update[key] === "string") next[key] = update[key];
       for (const key of [
@@ -601,6 +642,7 @@ async function startApplication() {
         "formatOnOpen",
         "historyEnabled",
         "spellcheckEnabled",
+        "parameterHints",
       ])
         if (typeof update[key] === "boolean") next[key] = update[key];
       if (
@@ -614,6 +656,10 @@ async function startApplication() {
         !["workbench", "classic"].includes(next.interfaceLayout) ||
         !["light", "dark"].includes(next.theme) ||
         !["inherit", "light", "dark"].includes(next.presentationTheme) ||
+        !["automatic", "manual", "off"].includes(next.completionMode) ||
+        !["automatic", "manual", "off"].includes(next.presentationCompletionMode) ||
+        !["off", "phpactor"].includes(next.phpLanguageServer) ||
+        !next.phpactorPath.trim() || next.phpactorPath.length > 1000 || /[\0\r\n]/.test(next.phpactorPath) ||
         !["off", "afterDelay", "onBlur"].includes(next.autosave) ||
         !["workspace", "nearby"].includes(next.attachmentMode)
       )
@@ -665,6 +711,7 @@ async function startApplication() {
           throw error;
         }
       }
+      if (next.phpLanguageServer !== state.settings.phpLanguageServer || next.phpactorPath !== state.settings.phpactorPath) phpLanguageServer.stop();
       state.settings = next;
       await saveState();
       void spellcheck.configure(next);
@@ -759,6 +806,7 @@ async function startApplication() {
     await saveState();
     await stateQueue;
     await phpPreview.stop();
+    phpLanguageServer.stop();
     await terminals.closeAll();
     confirmedClose = true;
     win.close();
@@ -923,6 +971,7 @@ async function startApplication() {
   });
   app.on("window-all-closed", () => {
     void phpPreview.stop();
+    phpLanguageServer.stop();
     terminals.closeAll();
     if (process.platform !== "darwin") app.quit();
   });
@@ -930,6 +979,7 @@ async function startApplication() {
     if (confirmedClose) terminals.closeAll();
   });
   app.on("will-quit", () => {
+    phpLanguageServer.stop();
     phpPreview.kill();
     void phpPreview.stop();
     watcher?.close();

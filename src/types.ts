@@ -1,3 +1,5 @@
+import type { CodeProject } from "../electron/code-intelligence.mjs";
+
 export interface Entry {
   path: string;
   name: string;
@@ -95,6 +97,11 @@ export interface Settings {
   presentationMode: boolean;
   presentationFontSize: number;
   presentationTheme: "inherit" | "light" | "dark";
+  completionMode: "automatic" | "manual" | "off";
+  presentationCompletionMode: "automatic" | "manual" | "off";
+  parameterHints: boolean;
+  phpLanguageServer: "off" | "phpactor";
+  phpactorPath: string;
 }
 export interface SpellcheckInfo {
   enabled: boolean;
@@ -141,7 +148,22 @@ export interface TerminalInfo {
   exited?: boolean;
   cwd?: string;
 }
+export interface PhpLanguageStatus {
+  status: "off" | "starting" | "ready" | "error";
+  message: string;
+}
 export interface MarginAPI {
+  codeProject(request: {
+    path: string;
+    overlays: { path: string; text: string }[];
+  }): Promise<CodeProject>;
+  phpLanguageQuery(request: {
+    path: string;
+    method: "completion" | "signatureHelp";
+    pos: number;
+    overlays: { path: string; text: string }[];
+  }): Promise<PhpLanguageStatus & { result: unknown }>;
+  phpLanguageStatus(): Promise<PhpLanguageStatus>;
   phpPreview(request: {
     path: string;
     context?: string;

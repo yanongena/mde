@@ -1,5 +1,15 @@
 # Functionality report
 
+## Project autocomplete — 30 October 2026 (local source)
+
+HTML/PHP source editors now suggest CSS classes from linked stylesheets and recursive local imports, paths and current-document IDs. PHP project functions retain parameters, default values, types and return types; local variables, core functions and small snippets are included. Dirty buffers override disk contents, including empty buffers. PHP parameter hints emphasize the current argument, including while typing a string and across nested calls. Namespace and function aliases resolve signatures. The built-in index uses syntax trees without executing document code and respects workspace ignores and symlink exclusions.
+
+Presentation has its own persisted autocomplete profile: on request by default, a compact larger list, deliberate arrow-key selection and Tab acceptance, Enter for new lines and parameter hints on request. Escape dismisses assistance before leaving presentation. Ordinary HTML/CSS/embedded-language completions, editor history and autosave/recovery remain available.
+
+Optional local Phpactor supplies type-aware completion, lazy function/method details and signature help. Preferences includes an executable/PHAR path and connection check; missing servers retain built-in help. No language server is automatically installed. Semantic diagnostics and debugging remain outside this update. See [Code assistance](CODE_ASSISTANCE.md) for configuration and limits.
+
+Verification: `npm run check` passed the production build and all **105 Node tests**. **13 selected hidden Electron workflows** passed, including five autocomplete workflows, presentation/theme/profile restoration, live HTML/CSS and PHP previews, preferences and all three shared smoke workflows. The affected PHP, teaching and snippet workflows were rerun after retaining parameter hints inside strings. A real Phpactor 2026.10.07.0 PHAR with PHP 8.5.12 was additionally checked in a temporary workspace and a hidden Electron session for inferred methods, parameter details, call insertion and second-argument highlighting. The presentation screenshot was visually reviewed. Packaged applications, installers and the complete Electron suite were not rebuilt or run.
+
 ## Teaching update — 28 October 2026 (local source)
 
 Presentation mode uses F8, a separate persisted font profile, larger code/reading text, a stronger cursor and reduced workspace chrome. It follows the ordinary theme by default, with optional persisted light/dark overrides. The previous persisted light default is migrated once to follow the workspace. Leaving it restores ordinary preferences. A Markdown or PDF assignment can be pinned on the left; new file navigation uses the right pane regardless of which pane was focused. Pins follow app-initiated moves, survive code-tab closure and restore with the workspace.

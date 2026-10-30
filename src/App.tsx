@@ -149,6 +149,11 @@ const initialSettings: Settings = {
   presentationMode: false,
   presentationFontSize: 24,
   presentationTheme: "inherit",
+  completionMode: "automatic",
+  presentationCompletionMode: "manual",
+  parameterHints: true,
+  phpLanguageServer: "off",
+  phpactorPath: "phpactor",
 };
 const isInside = (name: string, parent: string) =>
   name === parent || name.startsWith(parent + "/");
@@ -2285,6 +2290,7 @@ export default function App() {
         return;
       }
       if (event.key === "Escape") {
+        if (event.defaultPrevented) return;
         if (
           settingsRef.current.presentationMode &&
           !dialog &&
@@ -4074,6 +4080,8 @@ export default function App() {
                       path={tab.path}
                       text={tab.text}
                       settings={editorSettings}
+                      projectRoot={root}
+                      projectOverlays={previewOverlays}
                       active={active === tab.path}
                       visible={
                         active === tab.path ||

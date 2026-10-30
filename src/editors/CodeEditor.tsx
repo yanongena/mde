@@ -1,5 +1,14 @@
 import { useEffect, useRef, useState } from "react";
 import { basicSetup } from "codemirror";
+import { webEditorSetup } from "./web-editor-setup";
+import { isWebCode, isPhp } from "../../electron/code-symbols.mjs";
+import { codeAssistance, requestParameterHelp } from "../lib/code-completions";
+import { startCompletion } from "@codemirror/autocomplete";
+import {
+  CodeProjectClient,
+  completionMode,
+  type CodeBuffer,
+} from "../lib/code-project";
 import {
   EditorState,
   Compartment,
@@ -48,6 +57,7 @@ import {
   textSignature,
 } from "../lib/editor-position";
 
+const emptyOverlays: CodeBuffer[] = [];
 const externalChange = Annotation.define<boolean>();
 const editorOffset = (text: string, offset: number) =>
   text.slice(0, offset).replace(/\r\n/g, "\n").length;
@@ -56,6 +66,8 @@ interface Props {
   path: string;
   text: string;
   settings: Settings;
+  projectRoot?: string;
+  projectOverlays?: CodeBuffer[];
   active?: boolean;
   visible?: boolean;
   allowAutoFormat?: boolean;
@@ -68,6 +80,8 @@ export function CodeEditor({
   path,
   text,
   settings,
+  projectRoot = "",
+  projectOverlays,
   active = true,
   visible = active,
   allowAutoFormat = true,
@@ -81,7 +95,10 @@ export function CodeEditor({
     view = useRef<EditorView | null>(null),
     onChangeRef = useRef(onChange);
   const theme = useRef(new Compartment()),
-    indentation = useRef(new Compartment());
+    indentation = useRef(new Compartment()),
+    assistance = useRef(new Compartment());
+  const project = useRef(new CodeProjectClient());
+  project.current.update(projectRoot, projectOverlays || emptyOverlays);
   // Keep source EOLs outside CodeMirror so pasted LF/CRLF both form real lines.
   // Internal positions count LF; formatter/outline positions count source EOLs.
   const lineBreak = useRef(text.includes("\r\n") ? "\r\n" : "\n");
@@ -173,7 +190,13 @@ export function CodeEditor({
             { key: "Ctrl-d", run: copyLineDown, preventDefault: true },
             { key: "Meta-d", run: copyLineDown, preventDefault: true },
           ]),
-          basicSetup,
+          isWebCode(path) ? webEditorSetup : basicSetup,
+          assistance.current.of(
+            codeAssistance(path, () => ({
+              ...optionsRef.current,
+              project: project.current,
+            })),
+          ),
           EditorView.domEventHandlers({
             contextmenu: (event, current) => {
               event.preventDefault();
@@ -273,6 +296,40 @@ export function CodeEditor({
                     ).length,
                     run: () => toggleComment(current),
                   },
+                  ...(isWebCode(path)
+                    ? [
+                        {
+                          label: "Complete code",
+                          shortcut: "Ctrl+Space",
+                          disabled:
+                            completionMode(optionsRef.current.settings) ===
+                            "off",
+                          run: () => {
+                            current.focus();
+                            startCompletion(current);
+                          },
+                        },
+                        ...(isPhp(path)
+                          ? [
+                              {
+                                label: "Function parameters",
+                                shortcut: "Ctrl+Shift+Space",
+                                disabled:
+                                  !optionsRef.current.settings.parameterHints ||
+                                  completionMode(
+                                    optionsRef.current.settings,
+                                  ) === "off",
+                                run: () => {
+                                  current.focus();
+                                  current.dispatch({
+                                    effects: requestParameterHelp.of(null),
+                                  });
+                                },
+                              },
+                            ]
+                          : []),
+                      ]
+                    : []),
                   {
                     label: "Format document",
                     shortcut: "Shift+Alt+F",
@@ -475,6 +532,9 @@ export function CodeEditor({
     });
     const scrolled = () => positionChanged(path, "scroll");
     current.scrollDOM.addEventListener("scroll", scrolled, { passive: true });
+    const removeProjectWatch = window.margin.onFiles(() =>
+      project.current.invalidate(),
+    );
     const filename = path.split("/").pop() || "";
     const description =
       languages.find((l) => l.filename?.test(filename)) ||
@@ -541,6 +601,7 @@ export function CodeEditor({
     window.addEventListener("margin:find", find);
     return () => {
       removeFileDrop();
+      removeProjectWatch();
       cancelled = true;
       window.removeEventListener("margin:goto-line", goto);
       window.removeEventListener("margin:format-document", format);
@@ -581,6 +642,23 @@ export function CodeEditor({
       ],
     });
   }, [settings.theme, settings.indentSize]);
+  useEffect(() => {
+    view.current?.dispatch({
+      effects: assistance.current.reconfigure(
+        codeAssistance(path, () => ({
+          ...optionsRef.current,
+          project: project.current,
+        })),
+      ),
+    });
+  }, [
+    path,
+    settings.completionMode,
+    settings.presentationCompletionMode,
+    settings.presentationMode,
+    settings.parameterHints,
+    settings.phpLanguageServer,
+  ]);
   useEffect(() => {
     if (!settings.formatOnOpen) {
       attempted.current = false;

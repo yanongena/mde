@@ -5417,3 +5417,194 @@ test("Workbench compact chrome keeps labelled actions, toolbar keyboard access a
   await expect(page.getByRole("button", {name: "View options", exact: true})).toBeFocused();
   expect(errors).toEqual([]);
 });
+
+async function completionSetup() {
+  await page.getByRole("button", {name: "Preferences", exact: true}).click();
+  await page.getByLabel("Automatically format code on open", {exact: true}).uncheck();
+  await page.getByRole("button", {name: "Close preferences"}).click();
+}
+async function complete() {
+  await page.keyboard.press("Control+Space");
+  await expect(page.locator(".cm-tooltip-autocomplete")).toBeVisible();
+}
+
+test("Autocomplete HTML uses linked CSS imports, dirty stylesheets, paths and IDs", async () => {
+  await completionSetup();
+  await fs.writeFile(file("src/linked.css"), '@import "base.css"; .kaart:hover { color:red; }');
+  await fs.writeFile(file("src/base.css"), '.basis {}');
+  await fs.writeFile(file("src/unused.css"), '.unrelated {}');
+  await fs.writeFile(file("assets/test image.svg"), '<svg xmlns="http://www.w3.org/2000/svg"/>');
+  await expect(page.getByRole("treeitem", {name: "src/linked.css", exact: true})).toBeVisible();
+  await open("src/example.html");
+  const prefix = '<link rel="stylesheet" href="linked.css"><main id="inhoud"><div class="';
+  await sourceFill(prefix + 'ka');
+  await complete();
+  await expect(page.locator(".cm-completionLabel")).toContainText(["kaart"]);
+  await page.keyboard.press("Tab");
+  await expect(page.locator(".editor-pane.active .cm-content")).toHaveText(prefix + "kaart");
+  await open("src/linked.css");
+  await sourceFill('@import "base.css"; .leskaart {}');
+  await open("src/example.html");
+  await sourceFill(prefix + "les");
+  await complete();
+  await expect(page.locator(".cm-completionLabel")).toContainText(["leskaart"]);
+  await page.keyboard.press("Escape");
+  await sourceFill(prefix + "bas");
+  await complete();
+  await expect(page.locator(".cm-completionLabel")).toContainText(["basis"]);
+  await page.keyboard.press("Escape");
+  await sourceFill('<main id="inhoud"><label for="inh');
+  await complete();
+  await expect(page.locator(".cm-completionLabel")).toContainText(["inhoud"]);
+  await page.keyboard.press("Escape");
+  await sourceFill('<img src="../assets/test');
+  await complete();
+  await expect(page.locator(".cm-completionLabel")).toContainText(["../assets/test%20image.svg"]);
+  expect(await disk("src/linked.css")).toContain(".kaart:hover");
+  expect(errors).toEqual([]);
+});
+
+test("Autocomplete PHP recognizes project functions, dirty parameters, variables and mixed HTML", async () => {
+  await completionSetup();
+  await fs.writeFile(file("src/functions.php"), '<?php\nfunction begroet(string $naam, int $leeftijd = 12): string { return $naam; }');
+  await fs.writeFile(file("src/lesson.css"), '.leerling {}');
+  await expect(page.getByRole("treeitem", {name: "src/functions.php", exact: true})).toBeVisible();
+  await open("src/example.php");
+  await sourceFill('<?php\n$leerlingen = [];\nbegro');
+  await complete();
+  await expect(page.locator(".cm-completionDetail")).toContainText(['begroet(string $naam, int $leeftijd = 12): string']);
+  await page.keyboard.press("Tab");
+  await expect(page.locator(".editor-pane.active .cm-content")).toContainText("begroet()");
+  await expect(page.getByLabel("Function parameters", {exact: true})).toContainText("string $naam");
+  await page.keyboard.insertText('"Noor');
+  await expect(page.locator(".cm-parameter-hint strong")).toHaveText("string $naam");
+  await page.keyboard.insertText('", ');
+  await expect(page.locator(".cm-parameter-hint strong")).toHaveText("int $leeftijd = 12");
+  await page.keyboard.press("Escape");
+  await sourceFill('<?php\n$leerlingen = [];\n$lee');
+  await complete();
+  await expect(page.locator(".cm-completionLabel")).toContainText(["$leerlingen"]);
+  await page.keyboard.press("Escape");
+  await open("src/functions.php");
+  await sourceFill('<?php\nfunction begroet(string $voornaam, bool $toon = true): string { return $voornaam; }');
+  await open("src/example.php");
+  await sourceFill('<?php begro');
+  await complete();
+  await expect(page.locator(".cm-completionDetail")).toContainText(['begroet(string $voornaam, bool $toon = true): string']);
+  await page.keyboard.press("Escape");
+  await sourceFill('<link rel="stylesheet" href="lesson.css"><?php echo "ok"; ?><div class="lee');
+  await complete();
+  await expect(page.locator(".cm-completionLabel")).toContainText(["leerling"]);
+  await page.keyboard.press("Escape");
+  await fs.writeFile(file("src/external.php"), '<?php function externFunctie(int $waarde): int {return $waarde;}');
+  await expect(page.getByRole("treeitem", {name: "src/external.php", exact: true})).toBeVisible();
+  await sourceFill('<?php externF');
+  await complete();
+  await expect(page.locator(".cm-completionLabel")).toContainText(["externFunctie"]);
+  expect(await disk("src/functions.php")).toContain("$leeftijd");
+  expect(errors).toEqual([]);
+});
+
+test("Autocomplete teaching profile is manual, keeps Enter and Escape predictable and restores preferences", async () => {
+  await completionSetup();
+  await open("src/example.php");
+  await page.keyboard.press("F8");
+  await sourceFill('<?php\nstrl');
+  await page.waitForTimeout(550);
+  await expect(page.locator(".cm-tooltip-autocomplete")).toHaveCount(0);
+  await complete();
+  await expect(page.locator(".cm-teaching-completion")).toBeVisible();
+  await page.screenshot({path: "test-results/autocomplete-teaching-list.png"});
+  await page.keyboard.press("Escape");
+  await expect(page.locator(".cm-tooltip-autocomplete")).toHaveCount(0);
+  await expect(page.locator(".application")).toHaveClass(/presentation-mode/);
+  await complete();
+  await page.keyboard.press("Enter");
+  await expect.poll(() => page.locator(".editor-pane.active .cm-content").innerText()).toMatch(/^<\?php\nstrl\n\s*$/);
+  await sourceFill("<?php strl");
+  await complete();
+  await page.keyboard.press("ArrowDown");
+  await page.keyboard.press("Tab");
+  await expect(page.locator(".editor-pane.active .cm-content")).toHaveText("<?php strlen()");
+  await page.waitForTimeout(250);
+  await expect(page.locator(".cm-parameter-hint")).toHaveCount(0);
+  await page.keyboard.press("Control+Shift+Space");
+  await expect(page.locator(".cm-parameter-hint")).toContainText("strlen(string $string): int");
+  await page.screenshot({path: "test-results/autocomplete-teaching.png"});
+  await page.keyboard.press("Escape");
+  await expect(page.locator(".cm-parameter-hint")).toHaveCount(0);
+  await expect(page.locator(".application")).toHaveClass(/presentation-mode/);
+  await page.keyboard.press("F8");
+  await sourceFill("<?php ");
+  await page.keyboard.type("strl", {delay: 40});
+  await expect(page.locator(".cm-tooltip-autocomplete")).toBeVisible();
+  await page.keyboard.press("Escape");
+  await page.getByRole("button", {name: "Preferences", exact: true}).click();
+  await page.getByLabel("Autocomplete during presentation", {exact: true}).selectOption("off");
+  await page.getByLabel("Autocomplete", {exact: true}).selectOption("manual");
+  await page.getByRole("button", {name: "Close preferences"}).click();
+  await expect.poll(async () => JSON.parse(await fs.readFile(path.join(data, "state.json"), "utf8")).settings.presentationCompletionMode).toBe("off");
+  await app.evaluate(({app}) => app.exit()); await app.close(); await launch();
+  await page.getByRole("button", {name: "Preferences", exact: true}).click();
+  await expect(page.getByLabel("Autocomplete", {exact: true})).toHaveValue("manual");
+  await expect(page.getByLabel("Autocomplete during presentation", {exact: true})).toHaveValue("off");
+  expect(errors).toEqual([]);
+});
+
+test("Autocomplete snippets navigate fields and missing Phpactor preserves built-in project help", async () => {
+  await completionSetup();
+  await open("src/example.php");
+  await sourceFill("<?php fore");
+  await complete();
+  await page.keyboard.press("Tab");
+  await expect(page.locator(".editor-pane.active .cm-content")).toContainText("foreach ($items as $item)");
+  await page.keyboard.insertText("$leerlingen");
+  await page.keyboard.press("Tab");
+  await page.keyboard.insertText("$leerling");
+  await expect(page.locator(".editor-pane.active .cm-content")).toContainText("foreach ($leerlingen as $leerling)");
+  await page.keyboard.press("Escape");
+  await page.getByRole("button", {name: "Preferences", exact: true}).click();
+  await page.getByLabel("PHP project analysis", {exact: true}).selectOption("phpactor");
+  await page.getByLabel("Phpactor executable", {exact: true}).fill("margin-nonexistent-phpactor");
+  await page.getByLabel("Phpactor executable", {exact: true}).press("Enter");
+  await page.getByRole("button", {name: "Check Phpactor connection", exact: true}).click();
+  await expect(page.getByLabel("Phpactor connection", {exact: true})).toContainText("Cannot start Phpactor");
+  await page.getByRole("button", {name: "Close preferences"}).click();
+  await sourceFill("<?php strl");
+  await complete();
+  await expect(page.locator(".cm-completionLabel")).toContainText(["strlen"]);
+  expect(errors).toEqual([]);
+});
+
+
+test("Autocomplete preserves native HTML and CSS, adds descriptions and stays quiet in PHP comments", async () => {
+  await completionSetup();
+  await open("src/example.html");
+  await sourceFill("<inp");
+  await page.keyboard.press("Control+Alt+Space");
+  await expect(page.locator(".cm-completionInfo")).toContainText("Invoerveld");
+  await page.keyboard.press("Escape");
+  await sourceFill("<input ty");
+  await complete();
+  await expect(page.locator(".cm-completionLabel")).toContainText(["type"]);
+  await expect(page.locator(".cm-completionLabel").filter({hasText:"html:5"})).toHaveCount(0);
+  await page.keyboard.press("Escape");
+  await sourceFill('<input type="te');
+  await complete();
+  await expect(page.locator(".cm-completionLabel")).toContainText(["text"]);
+  await page.keyboard.press("Escape");
+  await open("src/example.css");
+  await sourceFill(".kaart { col");
+  await complete();
+  await expect(page.locator(".cm-completionLabel")).toContainText(["color"]);
+  await page.keyboard.press("Tab");
+  await expect(page.locator(".editor-pane.active .cm-content")).toContainText("color");
+  await open("src/example.php");
+  for (const text of ['<?php // strl', '<?php $tekst = "strl']) {
+    await sourceFill(text);
+    await page.keyboard.press("Control+Space");
+    await page.waitForTimeout(200);
+    await expect(page.locator(".cm-tooltip-autocomplete")).toHaveCount(0);
+  }
+  expect(errors).toEqual([]);
+});

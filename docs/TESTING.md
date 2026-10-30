@@ -37,6 +37,20 @@ Verification on 26 October 2026 (macOS, source application): `npm run check` pas
 
 ## Coverage
 
+Project autocomplete (30 October 2026, macOS source): `npm run check` passed the production TypeScript/Vite build and all **105 Node tests** (zero skipped). The 13 new Node tests cover grammar-based CSS selectors and PHP signatures/scopes, namespace aliases, nested argument lists, linked CSS/import/include resolution, dirty and empty overlays, index invalidation, confinement/limits, atomic language-server edits, real stdio framing/UTF-16 document synchronization and child cleanup. Focused commands:
+
+```sh
+node --test tests/code-intelligence.test.mjs tests/php-language-server.test.mjs
+npm run check
+npm run test:e2e -- --grep 'Autocomplete|Teaching presentation|Teaching live HTML|Teaching live PHP|UX clarity preferences|@smoke'
+npm run test:e2e -- --grep 'Autocomplete PHP|Autocomplete teaching|Autocomplete snippets'
+```
+
+The 13-workflow selection passed in hidden windows: all five new autocomplete workflows, both presentation workflows, live HTML/CSS and PHP workflows, preference search/reset/persistence and the three shared smoke workflows. The final three-workflow rerun passed after extending parameter hints to remain available inside string arguments. Coverage includes native HTML tags/attributes/values and CSS properties, Dutch descriptions, current-document IDs, encoded paths, linked/dirty CSS and imports, dirty project function parameters, external PHP creation, scoped variables, mixed PHP/HTML, snippet field navigation, missing Phpactor fallback, presentation Enter/Tab/Escape and restart persistence. The teaching parameter screenshot was visually reviewed.
+
+A separate temporary-workspace integration check used the actual Phpactor 2026.10.07.0 PHAR and PHP 8.5.12, first via stdio and then through a real hidden Electron session. It verified object-type method completion, lazy signature details, method-call insertion and active second-argument highlighting. It used a PHAR in the system temporary directory, not a bundled or automatically installed application dependency. Broad windowless checks plus the affected workflows and smoke tests were selected because changes are confined to source assistance, presentation keyboard handling and preferences. The complete Electron suite, installers and packaged applications were not rerun.
+
+
 Workbench UI trial (30 October 2026, macOS source): the final `npm run check:full` passed the production TypeScript/Vite build, all **92 Node tests** (zero skipped) and all **100 Electron workflows**, using hidden windows throughout. Full regression was selected because the change spans shared application chrome, visual formatting menus, preferences and workspace layout recovery. Existing PDF export/viewing, images, HTML/SVG/PHP previews, presentation, formatting, spelling, clipboard/context menus, Explorer moves/dragging/reference updates, search, tabs, terminal processes, split panes, history/conflicts and draft recovery are covered alongside the three new Workbench workflows.
 
 The new workflows verify switching Classic/Workbench without replacing dirty source editor nodes or live-preview documents; preference validation/persistence; a real terminal's identity and output across a lesson preset; preserving unsaved HTML while arranging assignment/code/result; persisted restoration of the previous layout after restart; compact controls and targets in both themes; toolbar arrow/Home/End navigation; menu focus return; and lesson-dialog cancellation. Session metadata validation also has a Node regression test. During development these focused commands were used:

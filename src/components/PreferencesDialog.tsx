@@ -1,6 +1,6 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { ArrowUpRight, BookOpen, RotateCcw, Search, X } from "lucide-react";
-import type { Settings, SpellcheckInfo } from "../types";
+import type { Settings, SpellcheckInfo, PhpLanguageStatus } from "../types";
 import { preferenceCategories } from "../lib/preferences";
 const spellingLanguageName = (code: string) =>
   code === "nl"
@@ -29,6 +29,23 @@ export function PreferencesDialog({
   onReset(categories: string[]): Promise<void>;
   onClose(): void;
 }) {
+  const [serverStatus, setServerStatus] = useState<PhpLanguageStatus | null>(
+    null,
+  );
+  const [checkingServer, setCheckingServer] = useState(false);
+  const checkServer = async () => {
+    setCheckingServer(true);
+    try {
+      setServerStatus(await window.margin.phpLanguageStatus());
+    } catch (error) {
+      setServerStatus({ status: "error", message: (error as Error).message });
+    } finally {
+      setCheckingServer(false);
+    }
+  };
+  useEffect(() => {
+    setServerStatus(null);
+  }, [settings.phpLanguageServer, settings.phpactorPath]);
   const [query, setQuery] = useState("");
   const [category, setCategory] = useState("all");
   const content = useRef<HTMLDivElement>(null);
@@ -266,6 +283,102 @@ export function PreferencesDialog({
               </select>
             </label>
           </div>
+          <div className="settings-section" hidden={!visible.has("completion")}>
+            <h3>Code assistance</h3>
+            <p>
+              HTML and PHP use project files and unsaved buffers. Linked CSS
+              stylesheets supply class names; PHP functions show their
+              parameters.
+            </p>
+            <label>
+              Autocomplete
+              <select
+                aria-label="Autocomplete"
+                value={settings.completionMode}
+                onChange={(event) =>
+                  void updateSettings({
+                    completionMode: event.target
+                      .value as Settings["completionMode"],
+                  })
+                }
+              >
+                <option value="automatic">Automatic</option>
+                <option value="manual">On request</option>
+                <option value="off">Off</option>
+              </select>
+            </label>
+            <label>
+              <input
+                type="checkbox"
+                checked={settings.parameterHints}
+                onChange={(event) =>
+                  void updateSettings({ parameterHints: event.target.checked })
+                }
+              />
+              Function parameter hints
+            </label>
+            <p>
+              Ctrl+Space opens suggestions. Ctrl+Shift+Space shows function
+              parameters. Ctrl+Alt+Space adds descriptions. On macOS, Option+I
+              also opens suggestions.
+            </p>
+            <label>
+              PHP project analysis
+              <select
+                aria-label="PHP project analysis"
+                value={settings.phpLanguageServer}
+                onChange={(event) =>
+                  void updateSettings({
+                    phpLanguageServer: event.target
+                      .value as Settings["phpLanguageServer"],
+                  })
+                }
+              >
+                <option value="off">Built-in project suggestions</option>
+                <option value="phpactor">Built-in + Phpactor</option>
+              </select>
+            </label>
+            {settings.phpLanguageServer === "phpactor" && (
+              <>
+                <label>
+                  Phpactor executable
+                  <input
+                    aria-label="Phpactor executable"
+                    defaultValue={settings.phpactorPath}
+                    key={settings.phpactorPath}
+                    onBlur={(event) => {
+                      if (event.target.value.trim())
+                        void updateSettings({
+                          phpactorPath: event.target.value.trim(),
+                        });
+                    }}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter") event.currentTarget.blur();
+                    }}
+                  />
+                </label>
+                <p>
+                  Use an installed Phpactor executable or an absolute path to
+                  phpactor.phar. A PHAR needs PHP on this computer. Phpactor
+                  runs locally for additional type and method suggestions.
+                </p>
+                <button
+                  type="button"
+                  disabled={checkingServer}
+                  onClick={() => void checkServer()}
+                >
+                  {checkingServer ? "Connecting…" : "Check Phpactor connection"}
+                </button>
+                {serverStatus && (
+                  <p role="status" aria-label="Phpactor connection">
+                    {serverStatus.status === "ready"
+                      ? "Phpactor connected"
+                      : serverStatus.message || "Phpactor is not connected"}
+                  </p>
+                )}
+              </>
+            )}
+          </div>
           <div className="settings-section" hidden={!visible.has("teaching")}>
             <h3>Teaching &amp; presentation</h3>
             <p>
@@ -291,6 +404,28 @@ export function PreferencesDialog({
                 ))}
               </select>
             </label>
+            <label>
+              Autocomplete during presentation
+              <select
+                aria-label="Autocomplete during presentation"
+                value={settings.presentationCompletionMode}
+                onChange={(event) =>
+                  void updateSettings({
+                    presentationCompletionMode: event.target
+                      .value as Settings["presentationCompletionMode"],
+                  })
+                }
+              >
+                <option value="manual">On request · recommended</option>
+                <option value="automatic">Quiet automatic</option>
+                <option value="off">Off</option>
+              </select>
+            </label>
+            <p>
+              Presentation suggestions use a compact, larger list. Select with
+              the arrow keys and confirm with Tab; Enter keeps creating a new
+              line. Parameter hints appear on request.
+            </p>
             <label>
               Presentation theme
               <select

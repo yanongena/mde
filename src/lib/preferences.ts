@@ -23,11 +23,27 @@ export const preferenceCategories: {
     ],
   },
   {
+    id: "completion",
+    title: "Code assistance",
+    keywords:
+      "autocomplete completion PHP HTML CSS classes functions parameters snippets signature project Phpactor language server",
+    keys: [
+      "completionMode",
+      "parameterHints",
+      "phpLanguageServer",
+      "phpactorPath",
+    ],
+  },
+  {
     id: "teaching",
     title: "Teaching & presentation",
     keywords:
       "teaching lesson projector beamer presentation font size theme F8 classroom",
-    keys: ["presentationFontSize", "presentationTheme"],
+    keys: [
+      "presentationFontSize",
+      "presentationTheme",
+      "presentationCompletionMode",
+    ],
   },
   {
     id: "spelling",

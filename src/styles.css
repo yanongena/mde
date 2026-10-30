@@ -2929,3 +2929,39 @@ kbd {
     padding: 0 10px;
   }
 }
+
+.cm-project-completion {
+  max-width: min(760px, 90vw);
+  background: var(--surface) !important;
+  color: var(--text) !important;
+  border-color: var(--line) !important;
+}
+.cm-project-completion ul { max-height: 15em !important; }
+.cm-project-completion li { padding: 3px 9px !important; }
+.cm-project-completion .cm-completionLabel { font-weight: 500; }
+.cm-project-completion .cm-completionDetail {
+  display: inline-block;
+  max-width: min(42ch, 45vw);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  vertical-align: bottom;
+  white-space: nowrap;
+  color: var(--muted);
+}
+.cm-project-completion li[aria-selected="true"] { background: var(--accent) !important; color: white !important; }
+.cm-project-completion li[aria-selected="true"] .cm-completionDetail { color: inherit; }
+.cm-teaching-completion { font-size: clamp(18px, .85em, 28px); }
+.cm-teaching-completion ul { max-height: 9.5em !important; }
+.cm-teaching-completion .cm-completionDetail { max-width: 27ch; }
+.cm-tooltip.cm-parameter-hint {
+  max-width: min(900px, 90vw);
+  padding: 8px 12px;
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid var(--line);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.cm-parameter-hint strong { color: var(--accent); background: var(--accent-soft, var(--hover)); border-radius: 3px; }
+.cm-parameter-hint small { display: block; font-family: var(--font-ui, system-ui); font-size: .7em; color: var(--muted); }
+.presentation-mode .cm-parameter-hint { font-size: .85em; }

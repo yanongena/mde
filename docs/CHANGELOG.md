@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased — project autocomplete and teaching profiles
+
+- Added HTML/PHP project suggestions: CSS classes from linked stylesheets and recursive local imports, file paths, current-document IDs, PHP project functions with parameter/default/return-type information, local variables, core PHP functions and small navigable snippets. Unsaved buffers override disk contents.
+- Added PHP signature help with active-argument highlighting, namespace/function-alias resolution and an optional local Phpactor connection for type-aware functions and methods.
+- Added Code assistance preferences and a separate presentation completion profile. Presentation defaults to on request, uses a compact larger list, preserves Enter for new lines and confirms deliberate selections with Tab. Escape dismisses assistance before leaving presentation.
+- Added editor context-menu commands for completion and PHP parameters. Ctrl+Space opens suggestions, Ctrl+Shift+Space requests parameters and Ctrl+Alt+Space adds descriptions; macOS also supports Option+I.
+- See `docs/CODE_ASSISTANCE.md` for behavior, configuration and limits.
+
 ## Unreleased — Workbench UI trial
 
 - Added Workbench as the compact default, with a smaller project header, separate file/document rows, neutral light/dark surfaces, a labelled Document menu and direct Outline control. Classic remains available in Preferences without replacing open editors or running processes.
