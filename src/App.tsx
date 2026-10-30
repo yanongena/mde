@@ -184,6 +184,10 @@ export default function App() {
     setSplitState(next);
   };
   const [livePreview, setLivePreview] = useState(false);
+  const [previewCodeHidden, setPreviewCodeHidden] = useState(false);
+  useEffect(() => {
+    if (!livePreview) setPreviewCodeHidden(false);
+  }, [livePreview]);
   const livePreviewRef = useRef(livePreview);
   livePreviewRef.current = livePreview;
   const [previewTarget, setPreviewTarget] = useState("");
@@ -551,6 +555,7 @@ export default function App() {
   };
 
   async function restore(opened: OpenedWorkspace) {
+    setPreviewCodeHidden(false);
     setPdfSource(null);
     navigationToken.current++;
     setSplit(null);
@@ -2330,6 +2335,7 @@ export default function App() {
     (tab) => tab.path === previewTarget && supportsLivePreview(tab.path),
   );
   const previewVisible = livePreview && !!previewTab;
+  const codeHidden = previewVisible && previewCodeHidden;
   const presentation = settings.presentationMode;
   const editorSettings = presentation
     ? {
@@ -3711,7 +3717,9 @@ export default function App() {
             className={
               "editor-area" +
               (split ? " split" : "") +
-              (previewVisible ? " with-preview" : "")
+              (previewVisible ? " with-preview" : "") +
+              (codeHidden ? " preview-code-hidden" : "") +
+              (split?.assignment ? " with-assignment" : "")
             }
             style={
               {
@@ -3732,9 +3740,16 @@ export default function App() {
                     : "")
                 }
                 inert={
-                  active !== tab.path &&
-                  split?.left !== tab.path &&
-                  split?.right !== tab.path
+                  (codeHidden &&
+                    !(split?.assignment && split.left === tab.path)) ||
+                  (active !== tab.path &&
+                    split?.left !== tab.path &&
+                    split?.right !== tab.path)
+                }
+                data-preview-assignment={
+                  split?.assignment && split.left === tab.path
+                    ? "true"
+                    : undefined
                 }
                 style={
                   split
@@ -3956,7 +3971,7 @@ export default function App() {
                 Open a code file to work beside this assignment.
               </div>
             )}
-            {previewVisible && (
+            {previewVisible && !codeHidden && (
               <PreviewDivider
                 ratio={previewRatio}
                 codePath={split?.right || active}
@@ -3971,11 +3986,14 @@ export default function App() {
                 overlays={previewOverlays}
                 revision={previewRevision}
                 visible={previewVisible}
+                codeHidden={codeHidden}
+                onToggleCode={() => setPreviewCodeHidden((hidden) => !hidden)}
                 onLink={(href) => void followLink(previewTab.path, href)}
                 onClose={() => setLivePreview(false)}
               />
             )}
             {showOutline &&
+              !codeHidden &&
               !presentation &&
               current &&
               !isReadOnlyPreview(current.path) && (
@@ -3994,35 +4012,41 @@ export default function App() {
                 />
               )}
           </div>
-          {settings.terminalVisible && !settings.focusMode && !presentation && (
-            <div
-              className="resize-handle terminal-resize"
-              role="separator"
-              aria-label="Resize terminal"
-              aria-orientation="horizontal"
-              tabIndex={0}
-              onPointerDown={(e) => resizePanel(e, "terminal")}
-              onKeyDown={(e) => {
-                if (e.key === "ArrowUp" || e.key === "ArrowDown") {
-                  e.preventDefault();
-                  void updateSettings({
-                    terminalHeight: Math.min(
-                      window.innerHeight - 300,
-                      Math.max(
-                        120,
-                        settings.terminalHeight +
-                          (e.key === "ArrowUp" ? 20 : -20),
+          {settings.terminalVisible &&
+            !settings.focusMode &&
+            !presentation &&
+            !codeHidden && (
+              <div
+                className="resize-handle terminal-resize"
+                role="separator"
+                aria-label="Resize terminal"
+                aria-orientation="horizontal"
+                tabIndex={0}
+                onPointerDown={(e) => resizePanel(e, "terminal")}
+                onKeyDown={(e) => {
+                  if (e.key === "ArrowUp" || e.key === "ArrowDown") {
+                    e.preventDefault();
+                    void updateSettings({
+                      terminalHeight: Math.min(
+                        window.innerHeight - 300,
+                        Math.max(
+                          120,
+                          settings.terminalHeight +
+                            (e.key === "ArrowUp" ? 20 : -20),
+                        ),
                       ),
-                    ),
-                  });
-                }
-              }}
-            />
-          )}
+                    });
+                  }
+                }}
+              />
+            )}
           <section
             className={
               "terminal-panel " +
-              (settings.terminalVisible && !settings.focusMode && !presentation
+              (settings.terminalVisible &&
+              !settings.focusMode &&
+              !presentation &&
+              !codeHidden
                 ? "visible"
                 : "")
             }
@@ -4090,7 +4114,8 @@ export default function App() {
                     terminalActive === info.id &&
                     settings.terminalVisible &&
                     !settings.focusMode &&
-                    !presentation
+                    !presentation &&
+                    !codeHidden
                   }
                   theme={settings.theme}
                   onError={(text) => notify(text, true)}

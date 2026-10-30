@@ -132,6 +132,7 @@ export interface TerminalInfo {
 export interface MarginAPI {
   phpPreview(request: {
     path: string;
+    context?: string;
     overlays: { path: string; text: string }[];
   }): Promise<{ html: string; url: string; status: number }>;
   phpPreviewStop(): Promise<void>;

@@ -4,6 +4,7 @@ import path from "node:path";
 import { createServer } from "node:net";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
+import { Workspace } from "./workspace.mjs";
 
 const MAX_BYTES = 64 * 1024 * 1024;
 
@@ -27,21 +28,42 @@ export class PhpPreview {
         throw new Error("PHP preview stopped.");
       if (!request || !/\.(php|phtml)$/i.test(request.path))
         throw new Error("Choose a PHP or PHTML file to preview.");
-      await workspace.resolve(request.path);
+      const sourceFile = await workspace.resolve(request.path);
+      const contextRoot = await workspace.resolve(request.context ?? "");
+      if (!(await fs.stat(contextRoot)).isDirectory())
+        throw new Error("Choose a folder for the PHP context.");
+      const requestPath = path
+        .relative(contextRoot, sourceFile)
+        .split(path.sep)
+        .join("/");
+      if (requestPath.startsWith("../") || path.isAbsolute(requestPath))
+        throw new Error(
+          "The PHP file is outside the selected context. Start PHP again and choose a parent folder.",
+        );
+      const project = new Workspace(
+        contextRoot,
+        workspace.transactions,
+        workspace.ignored,
+      );
       if (!Array.isArray(request.overlays) || request.overlays.length > 100)
         throw new Error("Invalid preview buffers.");
       const overlays = new Map();
       for (const entry of request.overlays) {
-        await workspace.resolve(entry.path);
+        const source = await workspace.resolve(entry.path);
         if (
           typeof entry.text !== "string" ||
           Buffer.byteLength(entry.text) > 10 * 1024 * 1024
         )
           throw new Error("A preview buffer exceeds 10 MB.");
-        overlays.set(entry.path, entry.text);
+        const relative = path
+          .relative(contextRoot, source)
+          .split(path.sep)
+          .join("/");
+        if (!relative.startsWith("../") && !path.isAbsolute(relative))
+          overlays.set(relative, entry.text);
       }
       if (
-        this.root !== workspace.root ||
+        this.root !== contextRoot ||
         !this.child ||
         this.child.exitCode !== null ||
         this.child.signalCode !== null
@@ -52,29 +74,29 @@ export class PhpPreview {
         );
         this.directory = path.join(this.temporary, "project");
         await fs.mkdir(this.directory);
-        this.root = workspace.root;
+        this.root = contextRoot;
       }
       try {
-        const entries = (await workspace.tree()).filter(
+        const entries = (await project.tree()).filter(
           (entry) => !entry.directory,
         );
         if (entries.length > 10000)
           throw new Error(
-            "PHP preview supports projects with up to 10,000 files. Exclude unrelated folders in Preferences.",
+            "The selected PHP context exceeds 10,000 files. Start PHP again and choose a smaller folder.",
           );
         let bytes = 0;
         const current = new Set();
         for (const entry of entries) {
           if (generation !== this.generation)
             throw new Error("PHP preview stopped.");
-          const source = await workspace.resolve(entry.path);
+          const source = await project.resolve(entry.path);
           const stat = await fs.stat(source);
           const overlay = overlays.get(entry.path);
           bytes +=
             overlay === undefined ? stat.size : Buffer.byteLength(overlay);
           if (bytes > MAX_BYTES)
             throw new Error(
-              "PHP preview supports projects up to 64 MB. Exclude unrelated folders in Preferences.",
+              "The selected PHP context exceeds 64 MB. Start PHP again and choose a smaller folder.",
             );
           current.add(entry.path);
           const signature =
@@ -100,14 +122,14 @@ export class PhpPreview {
             this.files.delete(name);
           }
         }
-        if (!current.has(request.path))
+        if (!current.has(requestPath))
           throw new Error(
             "This PHP file is excluded from the workspace preview.",
           );
         if (generation !== this.generation)
           throw new Error("PHP preview stopped.");
         if (!this.child) await this.start(generation);
-        const url = `${this.address}/${request.path.split("/").map(encodeURIComponent).join("/")}`;
+        const url = `${this.address}/${requestPath.split("/").map(encodeURIComponent).join("/")}`;
         this.controller = new AbortController();
         const response = await fetch(url, {
           signal: AbortSignal.any([
@@ -184,6 +206,10 @@ return false;
     const child = (this.child = spawn(
       executable,
       [
+        // Preview buffers change rapidly; cli-server can enable OPcache even
+        // when opcache.enable_cli is off and serve stale code after a refresh.
+        "-d",
+        "opcache.enable=0",
         "-d",
         "display_errors=1",
         "-d",

@@ -1873,6 +1873,14 @@ kbd {
 .action-dialog.wide {
   width: 850px;
 }
+.php-context-dialog {
+  margin: auto;
+  color: var(--text);
+  max-width: calc(100vw - 32px);
+}
+.php-context-dialog::backdrop { background: rgb(0 0 0 / 45%); }
+.php-context-dialog label { display: flex; flex-direction: column; gap: 9px; font-size: 12px; }
+.php-context-dialog select { width: 100%; }
 .action-dialog.move-dialog {
   width: 600px;
   max-height: calc(100vh - 48px);
@@ -2733,6 +2741,23 @@ kbd {
 .editor-area.split > .live-preview { grid-column: 4; }
 .editor-area.with-preview > .outline { grid-column: 4; grid-row: 1; }
 .editor-area.split.with-preview > .outline { grid-column: 5; }
+.editor-area.with-preview.preview-code-hidden {
+  grid-template-columns: minmax(0, 1fr);
+}
+.editor-area.with-preview.preview-code-hidden > .editor-pane:not([data-preview-assignment="true"]) {
+  display: none;
+}
+.editor-area.with-preview.preview-code-hidden > .live-preview {
+  grid-column: 1;
+  border-left: none;
+}
+.editor-area.split.with-preview.preview-code-hidden.with-assignment {
+  grid-template-columns: minmax(0, 0.8fr) minmax(0, 2.2fr);
+}
+.editor-area.split.with-preview.preview-code-hidden.with-assignment > .live-preview {
+  grid-column: 2;
+  border-left: 1px solid var(--line);
+}
 .preview-divider {
   grid-column: 2;
   grid-row: 1;

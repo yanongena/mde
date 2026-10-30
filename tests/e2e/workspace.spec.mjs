@@ -498,6 +498,27 @@ test("Teaching live preview divider resizes code and result with mouse and keybo
   await expect.poll(async () => Number(await divider.getAttribute("aria-valuenow"))).toBeGreaterThan(60);
   await expect(divider).toHaveAttribute("data-dragging", "false");
   await expect(frame.locator("body")).toHaveAttribute("data-resize-preserved", "yes");
+  const ratioBeforeHide = await divider.getAttribute("aria-valuenow");
+  await toggleOutline();
+  await page.keyboard.press(shortcut + "+`");
+  await expect(page.locator(".outline")).toBeVisible();
+  await expect(page.getByRole("region", { name: "Integrated terminal" })).toBeVisible();
+  await page.getByRole("button", { name: "Hide code", exact: true }).click();
+  await expect(code).toBeHidden();
+  await expect(code).toHaveAttribute("inert", "");
+  await expect(divider).toHaveCount(0);
+  await expect(page.locator(".outline")).toHaveCount(0);
+  await expect(page.getByRole("region", { name: "Integrated terminal" })).toBeHidden();
+  await expect(page.getByRole("button", { name: "Show code", exact: true })).toHaveAttribute("aria-pressed", "true");
+  await expect.poll(async () => Math.abs((await preview.boundingBox()).width - (await page.locator(".editor-area").boundingBox()).width)).toBeLessThan(2);
+  await expect(frame.locator("body")).toHaveAttribute("data-resize-preserved", "yes");
+  await page.getByRole("button", { name: "Show code", exact: true }).press("Enter");
+  await expect(code).toBeVisible();
+  await expect(divider).toHaveAttribute("aria-valuenow", ratioBeforeHide);
+  await expect(page.locator(".outline")).toBeVisible();
+  await expect(page.getByRole("region", { name: "Integrated terminal" })).toBeVisible();
+  await toggleOutline();
+  await page.keyboard.press(shortcut + "+`");
   await divider.dblclick();
   await expect(divider).toHaveAttribute("aria-valuenow", "50");
   await divider.focus();
@@ -530,6 +551,13 @@ test("Teaching live preview divider resizes code and result with mouse and keybo
   await page.mouse.up();
   await expect.poll(async () => Number(await divider.getAttribute("aria-valuenow"))).toBeLessThan(60);
   expect(Math.abs((await assignment.boundingBox()).width - assignmentBefore.width)).toBeLessThan(2);
+  await page.getByRole("button", { name: "Hide code", exact: true }).click();
+  await expect(code).toBeHidden();
+  await expect(assignment).toBeVisible();
+  await expect(divider).toHaveCount(0);
+  await page.screenshot({ path: "test-results/preview-code-hidden.png" });
+  await page.getByRole("button", { name: "Show code", exact: true }).click();
+  await expect(code).toBeVisible();
   await toggleOutline();
   await expect(page.locator(".outline")).toBeVisible();
   const resultBox = await preview.boundingBox();
@@ -552,24 +580,74 @@ test("Teaching live PHP preview explicitly starts, renders unsaved includes, rep
   await expect(page.getByRole("treeitem", { name: "src/value.php", exact: true })).toBeVisible();
   await page.getByRole("button", { name: "Show live preview beside code", exact: true }).click();
   await expect(page.locator(".live-preview iframe")).toHaveCount(0);
+  const openBrowser = page.getByRole("button", { name: "Open PHP preview in browser", exact: true });
+  await expect(openBrowser).toBeDisabled();
   await page.getByRole("button", { name: "Start PHP preview", exact: true }).click();
+  const contextDialog = page.getByRole("dialog", { name: "PHP context", exact: true });
+  await expect(contextDialog.getByLabel("PHP context folder")).toHaveValue("src");
+  await page.screenshot({ path: "test-results/php-context-dialog.png" });
+  await page.keyboard.press("Escape");
+  await expect(contextDialog).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Start PHP preview", exact: true })).toBeFocused();
+  await expect(page.locator(".live-preview iframe")).toHaveCount(0);
+  // A large unrelated file must only prevent previewing the whole workspace.
+  const large = await fs.open(file("unrelated.bin"), "w");
+  await large.truncate(65 * 1024 * 1024);
+  await large.close();
+  await page.getByRole("button", { name: "Start PHP preview", exact: true }).click();
+  await contextDialog.getByLabel("PHP context folder").selectOption("");
+  await contextDialog.getByRole("button", { name: "Start PHP", exact: true }).click();
+  await expect(page.locator(".live-preview [role=alert]")).toContainText("64 MB");
+  await expect(page.locator(".live-preview [role=status]")).toContainText("stopped");
+  await page.getByRole("button", { name: "Start PHP preview", exact: true }).click();
+  await contextDialog.getByLabel("PHP context folder").selectOption("src");
+  await contextDialog.getByRole("button", { name: "Start PHP", exact: true }).click();
   const preview = page.frameLocator('.live-preview iframe');
   await expect(preview.locator("h1")).toHaveText("Saved include");
+  await expect(page.locator(".live-preview")).not.toContainText("PHP running");
+  await expect(page.locator(".live-preview .html-preview-toolbar")).toHaveCount(0);
   await open("src/value.php");
   // Both PHP files are previewable; return to the entry point after editing the include.
   await sourceFill('<?php $value = "Unsaved include";');
   await open("src/example.php");
   await expect(preview.locator("h1")).toHaveText("Unsaved include");
+  await preview.locator("body").evaluate((body) => { body.dataset.hidePreserved = "yes"; });
+  await page.getByRole("button", { name: "Hide code", exact: true }).click();
+  await expect(page.locator('.editor-pane[data-path="src/example.php"]')).toBeHidden();
+  await expect(page.getByRole("button", { name: "Stop PHP preview", exact: true })).toBeVisible();
+  await expect(preview.locator("body")).toHaveAttribute("data-hide-preserved", "yes");
+  await app.evaluate(({ shell }) => {
+    globalThis.phpBrowserUrls = [];
+    shell.openExternal = async (url) => { globalThis.phpBrowserUrls.push(url); };
+  });
+  await openBrowser.click();
+  const browserUrl = await app.evaluate(() => globalThis.phpBrowserUrls[0]);
+  expect(browserUrl).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/example\.php$/);
+  expect(await (await fetch(browserUrl)).text()).toContain("<h1>Unsaved include</h1>");
+  await page.getByRole("button", { name: "Show code", exact: true }).click();
+  await expect(page.locator('.editor-pane[data-path="src/example.php"]')).toBeVisible();
   expect(await disk("src/example.php")).toBe(original);
   expect(await disk("src/value.php")).toContain("Saved include");
   await sourceFill("<?php if (");
+  await expect(page.locator(".editor-pane.active .cm-content")).toHaveText("<?php if (");
   await expect(preview.locator("body")).toContainText("Parse error");
   await sourceFill('<?php echo "<h1>Recovered</h1>";');
   await expect(preview.locator("h1")).toHaveText("Recovered");
   await page.getByRole("button", { name: "Stop PHP preview", exact: true }).click();
   await expect(page.getByRole("button", { name: "Start PHP preview", exact: true })).toBeVisible();
+  await expect(openBrowser).toBeDisabled();
   await sourceFill('<?php echo "<h1>Stopped</h1>";');
   await expect(preview.locator("h1")).toHaveText("Recovered");
+  await fs.rm(file("unrelated.bin"));
+  await page.getByRole("button", { name: "Start PHP preview", exact: true }).click();
+  await expect(contextDialog.getByLabel("PHP context folder")).toHaveValue("src");
+  await contextDialog.getByLabel("PHP context folder").selectOption("");
+  await contextDialog.getByRole("button", { name: "Start PHP", exact: true }).click();
+  await expect(preview.locator("h1")).toHaveText("Stopped");
+  await openBrowser.click();
+  const restartedUrl = await app.evaluate(() => globalThis.phpBrowserUrls[1]);
+  expect(restartedUrl).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/src\/example\.php$/);
+  expect(await (await fetch(restartedUrl)).text()).toContain("<h1>Stopped</h1>");
   await page.getByRole("button", { name: "Close live preview", exact: true }).click();
   expect(errors).toEqual([]);
 });
@@ -931,6 +1009,31 @@ test("all requested code languages highlight, edit/save, search/replace, diagnos
     .poll(() => diskWhenPresent("src/recovered.py"))
     .toBe("# Unsaved editor changes\n");
   expect(await disk("src/example.py")).toBe("# New disk version\n");
+  expect(errors).toEqual([]);
+});
+
+test("source editor duplicates lines with Control+D and Meta+D and supports undo", async () => {
+  await settingsManual();
+  await open("src/example.py");
+  const content = page.locator(".editor-pane.active .cm-content");
+  for (const modifier of ["Control", "Meta"]) {
+    for (const { text, steps, expected } of [
+      { text: "first\n    middle\nlast", steps: ["ArrowUp", "Home"], expected: "first\n    middle\n    middle\nlast" },
+      { text: "first\nlast", steps: [], expected: "first\nlast\nlast" },
+      { text: "first\n", steps: [], expected: "first\n\n" },
+      { text: "first\nsecond\nlast", steps: ["Home", "Shift+ArrowUp", "Shift+ArrowUp"], expected: "first\nsecond\nfirst\nsecond\nlast" },
+    ]) {
+      await sourceFill(text);
+      for (const key of steps) await page.keyboard.press(key);
+      await page.keyboard.press(modifier + "+d");
+      await save();
+      expect(await disk("src/example.py")).toBe(expected);
+      await content.focus();
+      await page.keyboard.press(shortcut + "+z");
+      await save();
+      expect(await disk("src/example.py")).toBe(text);
+    }
+  }
   expect(errors).toEqual([]);
 });
 

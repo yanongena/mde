@@ -150,6 +150,53 @@ test("PHP preview refuses escaped paths, symlinks, invalid buffers and oversized
   assert.equal(server.temporary, undefined);
 });
 
+test("PHP context limits copying and document root to the selected folder, preserving unsaved includes", { skip: !phpInstalled }, async (t) => {
+  const { root, server, workspace } = await fixture(t);
+  const large = await fs.open(path.join(root, "unrelated.bin"), "w");
+  await large.truncate(65 * 1024 * 1024);
+  await large.close();
+  await fs.writeFile(path.join(root, "lesson", "style.css"), "h1 { color: red; }");
+  const result = await server.render(workspace, {
+    context: "lesson", path: "lesson/index.php",
+    overlays: [{ path: "lesson/value.php", text: '<?php $value = "Scoped include";' }],
+  });
+  assert.equal(result.html, "<h1>Scoped include</h1>");
+  assert.match(result.url, /\/index.php$/);
+  assert.deepEqual((await fs.readdir(server.directory)).sort(), ["index.php", "style.css", "value.php"]);
+  assert.equal(await (await fetch(new URL("/style.css", result.url))).text(), "h1 { color: red; }");
+  assert.equal(await fs.readFile(path.join(root, "lesson/value.php"), "utf8"), '<?php $value = "Original";');
+  const oldCopy = server.temporary;
+  await fs.rm(path.join(root, "unrelated.bin"));
+  const next = await server.render(workspace, { context: "", path: "lesson/index.php", overlays: [] });
+  assert.equal(next.html, "<h1>Original</h1>");
+  assert.match(next.url, /\/lesson\/index.php$/);
+  await assert.rejects(fs.stat(oldCopy), { code: "ENOENT" });
+});
+
+test("PHP preview refreshes code after browser requests cache an older project copy", { skip: !phpInstalled }, async (t) => {
+  const { server, workspace } = await fixture(t);
+  const first = await server.render(workspace, { path: "lesson/index.php", overlays: [] });
+  // A saved file with an old timestamp can become eligible for OPcache when
+  // the browser requests it. The next editor change must execute immediately.
+  const old = new Date(Date.now() - 60000);
+  await fs.utimes(path.join(server.directory, "lesson/index.php"), old, old);
+  assert.equal(await (await fetch(first.url)).text(), "<h1>Original</h1>");
+  const changed = await server.render(workspace, {
+    path: "lesson/index.php", overlays: [{ path: "lesson/index.php", text: "<?php if (" }],
+  });
+  assert.match(changed.html, /Parse error/);
+});
+
+test("PHP context rejects escaped folders, files, symlinks and an entry point outside the context", async (t) => {
+  const { root, server, workspace } = await fixture(t);
+  await fs.mkdir(path.join(root, "sibling"));
+  await fs.symlink(path.join(root, "lesson"), path.join(root, "linked-folder"));
+  for (const [context, error] of [["../escape", /outside/], ["lesson/index.php", /folder/], ["linked-folder", /Symbolic/], ["sibling", /outside the selected context/]]) {
+    await assert.rejects(server.render(workspace, { context, path: "lesson/index.php", overlays: [] }), error);
+  }
+  assert.equal(server.child, undefined);
+});
+
 test("stopping PHP preview aborts a running request and queued executions", { skip: !phpInstalled }, async (t) => {
   const { root, server, workspace } = await fixture(t);
   const started = await server.render(workspace, { path: "lesson/index.php", overlays: [] });

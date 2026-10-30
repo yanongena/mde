@@ -15,6 +15,7 @@ export function HtmlPreview({
   onActivate,
   position,
   standalone = false,
+  hideToolbar = false,
   overlays = [],
   revision = 0,
 }: {
@@ -24,6 +25,7 @@ export function HtmlPreview({
   onActivate(): void;
   position?: EditorPosition;
   standalone?: boolean;
+  hideToolbar?: boolean;
   overlays?: { path: string; text: string }[];
   revision?: number;
 }) {
@@ -78,11 +80,13 @@ export function HtmlPreview({
   );
   return (
     <div className="html-preview">
-      <div className="html-preview-toolbar">
-        {standalone
-          ? "Live preview · Current editor contents"
-          : `${format} preview · Edit in Source`}
-      </div>
+      {!hideToolbar && (
+        <div className="html-preview-toolbar">
+          {standalone
+            ? "Live preview · Current editor contents"
+            : `${format} preview · Edit in Source`}
+        </div>
+      )}
       <iframe
         key={revision}
         ref={frame}

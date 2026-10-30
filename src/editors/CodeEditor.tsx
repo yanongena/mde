@@ -16,6 +16,7 @@ import {
   redoDepth,
   selectAll,
   toggleComment,
+  copyLineDown,
 } from "@codemirror/commands";
 import { indentUnit, syntaxTree } from "@codemirror/language";
 import { languages } from "@codemirror/language-data";
@@ -168,6 +169,10 @@ export function CodeEditor({
       state: EditorState.create({
         doc: text,
         extensions: [
+          keymap.of([
+            { key: "Ctrl-d", run: copyLineDown, preventDefault: true },
+            { key: "Meta-d", run: copyLineDown, preventDefault: true },
+          ]),
           basicSetup,
           EditorView.domEventHandlers({
             contextmenu: (event, current) => {
