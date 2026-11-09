@@ -237,6 +237,8 @@ async function startApplication() {
       const response = await net.fetch(pathToFileURL(target).href);
       const headers = new Headers(response.headers);
       headers.set("Access-Control-Allow-Origin", "*");
+      // Workspace assets can change while a preview keeps using the same URL.
+      headers.set("Cache-Control", "no-store");
       return new Response(response.body, { status: response.status, headers });
     } catch {
       return new Response("", { status: 404 });

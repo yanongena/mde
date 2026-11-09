@@ -37,6 +37,31 @@ Verification on 26 October 2026 (macOS, source application): `npm run check` pas
 
 ## Coverage
 
+Preview flicker follow-up (6 November 2026, Windows source): HTML/CSS updates now patch the existing sandboxed document instead of navigating its iframe. Watcher notifications and manual refresh reload local assets in place; refreshed stylesheets replace their previous copy only after loading. External HTML/SVG reloads keep the mounted visual preview. The two CSS workflows additionally assert zero iframe loads across edits, manual save, autosave, external CSS/HTML changes and manual refresh, preserving input values and scroll position. Node coverage checks DOM/image/control identity, selection, inserted/removed nodes, SVG namespaces, preview policy, stylesheet cascade order and cancellation.
+
+Verification commands:
+
+```sh
+npm run build
+node --test tests/html-preview.test.mjs tests/markdown.test.mjs tests/code-intelligence.test.mjs
+node node_modules/@playwright/test/cli.js test --grep 'HTML CSS preview|HTML visual mode|SVG visual mode|Teaching live HTML|Teaching live PHP|Teaching live preview divider|@smoke' --timeout 120000
+```
+
+All 19 selected Node tests and all 12 selected hidden Electron workflows passed, including the three smoke workflows. Preview workflows and shared UI smoke coverage were selected because the update changes the preview document lifecycle; the full suite and installers were not run.
+
+CSS preview refresh (6 November 2026, Windows source): both new regressions failed before the fix: the live preview reverted to cached CSS after saving, and the split HTML visual preview did not receive CSS editor buffers. Previews now retain saved as well as dirty editor buffers, and local assets use `Cache-Control: no-store`. PHP execution and code intelligence still receive only dirty overlays.
+
+Verification commands:
+
+```sh
+npm run build
+node --test tests/markdown.test.mjs tests/code-intelligence.test.mjs
+node node_modules/@playwright/test/cli.js test --grep 'HTML CSS preview|HTML visual mode|SVG visual mode|Teaching live HTML|Teaching live PHP|Teaching live preview divider|@smoke'
+node node_modules/@playwright/test/cli.js test --grep 'HTML CSS preview|HTML visual mode survives|Teaching live PHP|visual authoring, tables' --timeout 120000
+```
+
+The build and all 16 selected Node tests passed. Twelve distinct hidden Electron workflows passed across the related run and focused rerun, including all three smoke workflows. Both CSS regressions cover caret changes, manual save, autosave, external changes with the CSS tab open and closed, and actual saved bytes. The first related run passed ten workflows; the external HTML reload test now explicitly disables automatic formatting so it tests a clean document, and the visual-authoring smoke exceeded its original 60-second total limit and passed with the command's 120-second limit. The final five-workflow rerun passed after rebuilding, including both extended CSS regressions and PHP. Targeted preview workflows plus shared UI smoke coverage were selected; the full suite and installers were not run.
+
 Project autocomplete (30 October 2026, macOS source): `npm run check` passed the production TypeScript/Vite build and all **105 Node tests** (zero skipped). The 13 new Node tests cover grammar-based CSS selectors and PHP signatures/scopes, namespace aliases, nested argument lists, linked CSS/import/include resolution, dirty and empty overlays, index invalidation, confinement/limits, atomic language-server edits, real stdio framing/UTF-16 document synchronization and child cleanup. Focused commands:
 
 ```sh

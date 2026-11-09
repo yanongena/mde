@@ -1,5 +1,9 @@
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef } from "react";
 import { htmlPreviewDocument } from "../lib/html-preview";
+import {
+  refreshPreviewAssets,
+  updatePreviewDocument,
+} from "../lib/html-preview-update";
 import { previewType } from "../lib/document-mode";
 import {
   positionChanged,
@@ -31,8 +35,16 @@ export function HtmlPreview({
 }) {
   const content = useMemo(
     () => htmlPreviewDocument(path, text, overlays),
-    [path, text, overlays, revision],
+    [path, text, overlays],
   );
+  const initial = useRef({ path, content });
+  if (initial.current.path !== path) initial.current = { path, content };
+  const applied = useRef<{
+    document: Document;
+    content: string;
+    revision: number;
+  } | null>(null);
+  const cancelRefresh = useRef<(() => boolean) | undefined>(undefined);
   const format = previewType(path) ?? "HTML";
   const frame = useRef<HTMLIFrameElement>(null);
   const saved = useRef(position);
@@ -40,6 +52,29 @@ export function HtmlPreview({
   textRef.current = text;
   const callbacks = useRef({ onLink, onActivate });
   callbacks.current = { onLink, onActivate };
+  function updateDocument() {
+    const document = frame.current?.contentDocument;
+    const previous = applied.current;
+    if (!document || previous?.document !== document) return;
+    const refreshing = cancelRefresh.current?.();
+    const win = document.defaultView;
+    const scrollTop = win?.scrollY ?? 0;
+    const scrollLeft = win?.scrollX ?? 0;
+    if (previous.content !== content)
+      updatePreviewDocument(document, previous.content, content);
+    if (previous.revision !== revision || refreshing)
+      cancelRefresh.current = refreshPreviewAssets(document);
+    applied.current = { document, content, revision };
+    if (win && (win.scrollY !== scrollTop || win.scrollX !== scrollLeft))
+      win.scrollTo(scrollLeft, scrollTop);
+  }
+  useLayoutEffect(updateDocument, [content, revision]);
+  useEffect(
+    () => () => {
+      cancelRefresh.current?.();
+    },
+    [],
+  );
   useEffect(
     () =>
       standalone
@@ -88,15 +123,21 @@ export function HtmlPreview({
         </div>
       )}
       <iframe
-        key={revision}
+        key={path}
         ref={frame}
         title={`${format} preview for ${path}`}
         sandbox="allow-same-origin"
         referrerPolicy="no-referrer"
-        srcDoc={content}
+        srcDoc={initial.current.content}
         onLoad={(event) => {
           const doc = event.currentTarget.contentDocument;
           if (!doc) return;
+          applied.current = {
+            document: doc,
+            content: initial.current.content,
+            revision,
+          };
+          updateDocument();
           if (saved.current?.mode === "visual")
             event.currentTarget.contentWindow?.scrollTo(
               0,

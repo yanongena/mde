@@ -488,6 +488,78 @@ test("Teaching live HTML preview follows unsaved HTML and CSS beside a PDF assig
   expect(errors).toEqual([]);
 });
 
+for (const mode of ["live", "visual split"]) {
+  test(`HTML CSS preview keeps current styles across caret changes and saves in ${mode} mode`, async () => {
+    await page.getByRole("button", { name: "Preferences", exact: true }).click();
+    await page.getByLabel("Automatically format code on open", { exact: true }).uncheck();
+    await page.getByRole("button", { name: "Close preferences" }).click();
+    await open("src/example.html");
+    const html = '<link rel="stylesheet" href="example.css"><h1>CSS regression</h1><input id="preview-name"><div style="height: 1600px"></div><p>End</p>';
+    await sourceFill(html);
+    await save();
+    if (mode === "live") {
+      await page.getByRole("button", { name: "Show live preview beside code", exact: true }).click();
+    } else {
+      await page.getByRole("button", { name: "Visual mode", exact: true }).click();
+      await viewAction("Split editor");
+      await page.getByLabel("Search files", { exact: true }).fill("example.css");
+      await page.keyboard.press("Enter");
+      await expect(page.locator(".editor-pane.split-visible")).toHaveCount(2);
+    }
+    const preview = page.frameLocator('iframe[title="HTML preview for src/example.html"]');
+    await expect(preview.locator("h1")).toHaveCSS("color", "rgb(0, 128, 0)");
+    await page.locator('iframe[title="HTML preview for src/example.html"]').evaluate((iframe) => {
+      iframe.dataset.previewLoads = "0";
+      iframe.addEventListener("load", () => { iframe.dataset.previewLoads = String(Number(iframe.dataset.previewLoads) + 1); });
+    });
+    await preview.locator("body").evaluate((body) => {
+      body.dataset.previewStable = "yes";
+      body.ownerDocument.querySelector("input").value = "Keep my input";
+      body.ownerDocument.defaultView.scrollTo(0, 180);
+    });
+    await open("src/example.css");
+    const css = "h1 {\n  color: rgb(120, 20, 30);\n  margin: 12px;\n}\n";
+    await sourceFill(css);
+    await expect(preview.locator("h1")).toHaveCSS("color", "rgb(120, 20, 30)");
+    await expect(preview.locator("body")).toHaveAttribute("data-preview-stable", "yes");
+    await page.locator('.editor-pane.active .cm-line').filter({ hasText: "margin:" }).click();
+    await expect(preview.locator("h1")).toHaveCSS("color", "rgb(120, 20, 30)");
+    await save();
+    expect(await disk("src/example.css")).toBe(css);
+    await expect(preview.locator("h1")).toHaveCSS("color", "rgb(120, 20, 30)");
+    await page.locator('.editor-pane.active .cm-line').filter({ hasText: "color:" }).click();
+    await expect(preview.locator("h1")).toHaveCSS("margin-top", "12px");
+    await expect(preview.locator("h1")).toHaveCSS("color", "rgb(120, 20, 30)");
+    await page.getByRole("button", { name: "Preferences", exact: true }).click();
+    await page.getByLabel("Autosave policy").selectOption("afterDelay");
+    await page.getByRole("button", { name: "Close preferences" }).click();
+    const autosavedCss = css.replace("120, 20, 30", "60, 70, 80");
+    await sourceFill(autosavedCss);
+    await expect(preview.locator("h1")).toHaveCSS("color", "rgb(60, 70, 80)");
+    await page.locator('.editor-pane.active .cm-line').filter({ hasText: "margin:" }).click();
+    await expect.poll(() => disk("src/example.css")).toBe(autosavedCss);
+    await expect(page.locator(".save-state")).toContainText("Saved");
+    await expect(preview.locator("h1")).toHaveCSS("color", "rgb(60, 70, 80)");
+    // Clean open buffers must also follow subsequent external changes.
+    await fs.writeFile(file("src/example.css"), "h1 { color: rgb(0, 0, 200); }\n");
+    await expect(page.locator('.editor-pane.active .cm-content')).toContainText("rgb(0, 0, 200)");
+    await expect(preview.locator("h1")).toHaveCSS("color", "rgb(0, 0, 200)");
+    await page.getByRole("button", { name: "Close example.css", exact: true }).click();
+    await expect(preview.locator("h1")).toHaveCSS("color", "rgb(0, 0, 200)");
+    await fs.writeFile(file("src/example.css"), "h1 { color: rgb(30, 40, 50); }\n");
+    await expect(preview.locator("h1")).toHaveCSS("color", "rgb(30, 40, 50)");
+    // Watcher events, HTML changes and manual refresh must retain the document.
+    await fs.writeFile(file("src/example.html"), html.replace("CSS regression", "Updated heading"));
+    await expect(preview.locator("h1")).toHaveText("Updated heading");
+    if (mode === "live") await page.getByRole("button", { name: "Refresh live preview", exact: true }).click();
+    await expect(preview.locator("body")).toHaveAttribute("data-preview-stable", "yes");
+    await expect(preview.locator("input")).toHaveValue("Keep my input");
+    await expect.poll(() => preview.locator("body").evaluate((body) => body.ownerDocument.defaultView.scrollY)).toBe(180);
+    await expect(page.locator('iframe[title="HTML preview for src/example.html"]')).toHaveAttribute("data-preview-loads", "0");
+    expect(errors).toEqual([]);
+  });
+}
+
 test("Teaching live preview divider resizes code and result with mouse and keyboard and restores its ratio", async () => {
   await open("src/example.html");
   await page.getByRole("button", { name: "Show live preview beside code", exact: true }).click();
@@ -707,6 +779,10 @@ test("HTML visual mode previews unsaved content and relative assets without chan
 });
 
 test("HTML visual mode survives external reloads and a restart while HTM defaults to source", async () => {
+  // External reloads apply to clean files; formatting would create local edits.
+  await page.getByRole("button", { name: "Preferences", exact: true }).click();
+  await page.getByLabel("Automatically format code on open", { exact: true }).uncheck();
+  await page.getByRole("button", { name: "Close preferences" }).click();
   await open("src/example.html");
   await page.getByRole("button", { name: "Visual mode", exact: true }).click();
   const preview = page.frameLocator('iframe[title="HTML preview for src/example.html"]');

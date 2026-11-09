@@ -260,6 +260,14 @@ export default function App() {
     tabsRef = useRef(tabs);
   tabsRef.current = tabs;
   const previewOverlays = useMemo(
+    // Saving must not replace current CSS with a previously loaded asset.
+    () =>
+      tabs
+        .filter((tab) => !isReadOnlyPreview(tab.path))
+        .map(({ path, text }) => ({ path, text })),
+    [tabs],
+  );
+  const dirtyOverlays = useMemo(
     () =>
       tabs
         .filter((tab) => tab.dirty && !isReadOnlyPreview(tab.path))
@@ -3922,7 +3930,12 @@ export default function App() {
           >
             {tabs.map((tab) => (
               <section
-                key={tab.path + ":" + tab.version}
+                key={
+                  tab.path + ":" +
+                  (previewType(tab.path) && tab.mode === "visual"
+                    ? "preview"
+                    : tab.version)
+                }
                 className={
                   "editor-pane " +
                   (active === tab.path ? "active " : "") +
@@ -4036,6 +4049,8 @@ export default function App() {
                   <HtmlPreview
                     path={tab.path}
                     text={tab.text}
+                    overlays={previewOverlays}
+                    revision={previewRevision}
                     onLink={(href) => void followLink(tab.path, href)}
                     onActivate={() => focusPane(tab.path)}
                     position={positions.current.get(tab.path) || tab.position}
@@ -4081,7 +4096,7 @@ export default function App() {
                       text={tab.text}
                       settings={editorSettings}
                       projectRoot={root}
-                      projectOverlays={previewOverlays}
+                      projectOverlays={dirtyOverlays}
                       active={active === tab.path}
                       visible={
                         active === tab.path ||
@@ -4179,6 +4194,7 @@ export default function App() {
                 path={previewTab.path}
                 text={previewTab.text}
                 overlays={previewOverlays}
+                phpOverlays={dirtyOverlays}
                 revision={previewRevision}
                 visible={previewVisible}
                 codeHidden={codeHidden}

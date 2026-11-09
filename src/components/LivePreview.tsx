@@ -90,6 +90,7 @@ export function LivePreview({
   path,
   text,
   overlays,
+  phpOverlays,
   revision,
   visible,
   codeHidden,
@@ -100,6 +101,7 @@ export function LivePreview({
   path: string;
   text: string;
   overlays: { path: string; text: string }[];
+  phpOverlays: { path: string; text: string }[];
   revision: number;
   visible: boolean;
   codeHidden: boolean;
@@ -143,7 +145,7 @@ export function LivePreview({
       try {
         const response = await window.margin.phpPreview({
           path,
-          overlays,
+          overlays: phpOverlays,
           context: context ?? "",
         });
         if (generation.current === token) setResult({ ...response, path });
@@ -166,7 +168,7 @@ export function LivePreview({
       clearTimeout(timer);
       generation.current++;
     };
-  }, [php, running, visible, path, text, overlays, context, revision, refresh]);
+  }, [php, running, visible, path, text, phpOverlays, context, revision, refresh]);
   useEffect(
     () => () => {
       void window.margin.phpPreviewStop();
