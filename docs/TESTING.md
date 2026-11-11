@@ -37,6 +37,28 @@ Verification on 26 October 2026 (macOS, source application): `npm run check` pas
 
 ## Coverage
 
+PHP variables in Markdown prose (11 November 2026, Windows source): inline math detection now requires paired dollar delimiters on the same line without whitespace just inside either delimiter. The reported `webshop.md` now resolves to editable Visual mode instead of mathematical-notation protection. The original lesson file was only read. Node regressions cover PHP parameters and array access, separate paragraphs, currency, escaped dollars and actual inline/display math. The new Electron workflow edits and saves a temporary lesson, switches Source/Visual and checks that variables and fenced PHP retain their displayed contents; ordinary Markdown escaping of brackets and underscores is allowed.
+
+Verification: `npm run build`, `node --test tests/markdown.test.mjs` (all six tests), and `node node_modules/@playwright/test/cli.js test --grep 'Markdown PHP variables'` passed. The related hidden run used `node node_modules/@playwright/test/cli.js test --grep 'Markdown PHP variables|Markdown visual preview|renderer isolation|P3 section menus support protected|@smoke'`: five workflows passed, the new test initially expected unescaped array brackets in serialized Markdown (corrected to verify their rendered roundtrip, then passed), and visual authoring reached its final screenshot after passing its behavioral assertions but timed out capturing that screenshot. The other two smoke workflows passed. The full suite and packaged application were not run.
+
+Editor selection stability (11 November 2026, Windows source): visual list, table and code controls now share a fixed-height context row, so entering or extending a selection cannot move the text under the pointer. Editable Markdown uses immediate caret scrolling. Both source and visual editors cancel pending view-restoration frames when a new pointer, keyboard, wheel or touch gesture occurs; normal navigation and session restoration remain covered.
+
+The regressions were checked against the previous behavior by temporarily disabling the two fixes: selecting a list moved the visual viewport from 158 to 194 pixels, and a pending restore reset a new wheel position from 840 to 600 in both editor modes. The production sources were restored and rebuilt before the final verification.
+
+Verification commands:
+
+```sh
+npm run build
+node --test tests/editor-position.test.mjs
+node node_modules/@playwright/test/cli.js test --grep 'editor mouse selection|editor delayed restoration|QoL navigation restores|QoL mode switches|QoL session restores|P2 QoL outline follows|context menus preserve visual|context menus address clicked table|heading levels, inline|Workbench compact|P3 QoL split documents|@smoke' --timeout 120000
+node node_modules/@playwright/test/cli.js test --grep 'editor mouse selection|editor delayed restoration|Workbench compact' --timeout 120000
+node node_modules/@playwright/test/cli.js test --grep 'Workbench compact' --timeout 120000
+```
+
+The build and all six Node tests passed. Fourteen distinct hidden Electron workflows passed across these runs, including all four new regressions and the three smoke workflows. The initial 17-workflow selection passed 13 tests. Three failures also reproduce with all four changed production files replaced by their unmodified `HEAD` versions: the formatted-word mode-switch test replaces the closing markup and following space, the visual-session test captures source head 545 rather than 542, and the split-session test does not restore the source scroll to 750 (14 on the original build, 447 on the changed build). Those existing behaviors remain outside this selection-drag fix. The fourth failure was a compact-window test race: a delayed native resize dismissed the Insert menu. That test now waits for the requested viewport and resize frames before testing keyboard menus, and passed its final focused run. The final four selection regressions also passed again before that test-only synchronization change.
+
+The original-source comparison used `--grep 'QoL mode switches|QoL session restores a visual|P3 QoL split documents|Workbench compact' --timeout 120000` and reproduced the three existing failures while the compact workflow passed. The disabled-fix comparison used `--grep 'editor mouse selection keeps visual|editor delayed restoration' --timeout 120000` and failed all three intended regressions. These were diagnostic runs; the final build contains both fixes. Related navigation, context-menu and shared smoke coverage was selected instead of the complete Electron suite. The visual-authoring screenshot was reviewed; installers and packaged applications were not rebuilt.
+
 Preview flicker follow-up (6 November 2026, Windows source): HTML/CSS updates now patch the existing sandboxed document instead of navigating its iframe. Watcher notifications and manual refresh reload local assets in place; refreshed stylesheets replace their previous copy only after loading. External HTML/SVG reloads keep the mounted visual preview. The two CSS workflows additionally assert zero iframe loads across edits, manual save, autosave, external CSS/HTML changes and manual refresh, preserving input values and scroll position. Node coverage checks DOM/image/control identity, selection, inserted/removed nodes, SVG namespaces, preview policy, stylesheet cascade order and cancellation.
 
 Verification commands:

@@ -54,6 +54,7 @@ import {
   registerEditor,
   editorHandle,
   positionChanged,
+  scheduleEditorRestore,
   textSignature,
 } from "../lib/editor-position";
 
@@ -504,7 +505,7 @@ export function CodeEditor({
             ? { effects: EditorView.scrollIntoView(top, { y: "start" }) }
             : {}),
         });
-        requestAnimationFrame(() => {
+        scheduleEditorRestore(current.dom, () => {
           if (!current.dom.isConnected) return;
           if (exact) current.scrollDOM.scrollTop = saved.scrollTop;
           else {
@@ -616,7 +617,7 @@ export function CodeEditor({
     if (!visible || restoredPosition.current) return;
     restoredPosition.current = true;
     if (!position) return;
-    requestAnimationFrame(() => {
+    return scheduleEditorRestore(view.current!.dom, () => {
       if (view.current?.dom.isConnected)
         editorHandle(path, "source")?.restore(position, active);
     });

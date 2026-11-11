@@ -799,6 +799,20 @@ kbd {
   background: var(--accent-bg);
   color: var(--accent);
 }
+.context-toolbars {
+  /* Selection must never move the text underneath a held mouse pointer. */
+  display: flex;
+  height: 36px;
+  flex-shrink: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  background: var(--surface);
+  border-bottom: 1px solid var(--line);
+}
+.context-toolbars .context-toolbar {
+  min-height: 0;
+  border-bottom: 0;
+}
 .context-toolbar,
 .link-toolbar {
   display: flex;
@@ -834,6 +848,10 @@ kbd {
   min-height: 0;
   overflow: auto;
   scroll-behavior: smooth;
+}
+.markdown-editor .document-scroll {
+  /* Caret/selection scrolling must finish before the next pointer hit test. */
+  scroll-behavior: auto;
 }
 .document-content {
   max-width: 820px;

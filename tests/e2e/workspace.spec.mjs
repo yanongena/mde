@@ -1585,6 +1585,55 @@ test("renderer isolation, path confinement, JSON diagnostics and literal HTML co
   expect(errors).toEqual([]);
 });
 
+test("Markdown PHP variables in prose stay editable in Visual mode", async () => {
+  await settingsManual();
+  const original =
+    "# Webshop\n\nElk element van $artikels bevat id, naam en aantal.\n\n" +
+    "- $bedragExcl en $percentage zijn de parameters.\n\n" +
+    "Vul **berekenSubtotaal(array $artikels): float** in.\n\n" +
+    "Een artikel lees je met $artikel['prijs_excl'] en $artikel['aantal'].\n\n" +
+    "```php\nfunction berekenBtw(float $bedragExcl, float $percentage = 21.0): float\n```\n";
+  await fs.writeFile(file("webshop.md"), original);
+  await expect(
+    page.getByRole("treeitem", { name: "webshop.md", exact: true }),
+  ).toBeVisible();
+  await open("webshop.md");
+  const editor = page.getByRole("textbox", { name: "Visual Markdown editor" });
+  await expect(editor).toBeVisible();
+  await expect(
+    page.getByLabel("Markdown preview", { exact: true }),
+  ).toHaveCount(0);
+  await expect(editor).toContainText("$bedragExcl en $percentage");
+  expect(await disk("webshop.md")).toBe(original);
+  await editor.locator("h1").click();
+  await page.keyboard.press("End");
+  await page.keyboard.insertText(" aangepast");
+  await save();
+  const saved = await disk("webshop.md");
+  expect(saved).toContain("# Webshop aangepast");
+  for (const variable of [
+    "$artikels",
+    "$bedragExcl",
+    "$percentage",
+    "$artikel",
+  ])
+    expect(saved).toContain(variable);
+  await page
+    .getByRole("button", { name: "Markdown source mode", exact: true })
+    .click();
+  await expect(page.locator(".editor-pane.active .cm-content")).toContainText(
+    "$bedragExcl en $percentage",
+  );
+  await page.getByRole("button", { name: "Visual mode", exact: true }).click();
+  await expect(editor).toBeVisible();
+  await expect(editor.locator("h1")).toHaveText("Webshop aangepast");
+  await expect(editor).toContainText("$artikel['prijs_excl'] en $artikel['aantal']");
+  await expect(editor.locator("pre code")).toHaveText(
+    "function berekenBtw(float $bedragExcl, float $percentage = 21.0): float",
+  );
+  expect(errors).toEqual([]);
+});
+
 test("Markdown visual preview renders PHP examples and reference links while preserving source", async () => {
   await settingsManual();
   const php =
@@ -3364,6 +3413,150 @@ test("QoL replace current advances past inserted matches and supports the replac
   ).toHaveText("foobar foobar");
   expect(errors).toEqual([]);
 });
+
+test("editor mouse selection keeps visual text and viewport stable across block contexts", async () => {
+  const original = "# Selection\n\n" + "Earlier paragraph.\n\n".repeat(20) +
+    "Plain selection target.\n\n- List selection target.\n\n" +
+    "```js\nconst selectionTarget = true;\n```\n\n" +
+    "| Heading |\n| --- |\n| Table selection target. |\n\n" +
+    "Later paragraph.\n\n".repeat(20);
+  await fs.writeFile(file("notes/welcome.md"), original);
+  await open("notes/welcome.md");
+  const visual = page.locator(".editor-pane.active .document-content");
+  const scroll = page.locator(".editor-pane.active .document-scroll");
+  await expect(visual).toBeFocused();
+  await visual.getByText("Plain selection target.", { exact: true }).scrollIntoViewIfNeeded();
+  for (const selector of ["li p", "pre code", "td p", "p"]) {
+    const target = selector === "p"
+      ? visual.getByText("Plain selection target.", { exact: true })
+      : visual.locator(selector).first();
+    await target.evaluate((element) => element.scrollIntoView({ block: "center", behavior: "instant" }));
+    const points = await target.evaluate((element) => {
+      const point = (offset) => {
+        const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
+        let text = walker.nextNode();
+        while (offset >= text.textContent.length && walker.nextNode()) {
+          offset -= text.textContent.length;
+          text = walker.currentNode;
+        }
+        const range = document.createRange();
+        range.setStart(text, offset);
+        range.setEnd(text, offset + 1);
+        const rect = range.getBoundingClientRect();
+        return { x: rect.left, y: rect.top + rect.height / 2 };
+      };
+      return { start: point(1), end: point(8), expected: element.textContent.slice(1, 8) };
+    });
+    const before = await scroll.evaluate((node) => ({ top: node.getBoundingClientRect().top, scroll: node.scrollTop }));
+    await page.mouse.move(points.start.x, points.start.y);
+    await page.mouse.down();
+    try {
+      await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+      await expect.poll(() => scroll.evaluate((node) => node.getBoundingClientRect().top)).toBe(before.top);
+      await page.mouse.move(points.end.x, points.end.y, { steps: 8 });
+    } finally {
+      await page.mouse.up();
+    }
+    await expect.poll(() => page.evaluate(() => window.getSelection().toString())).toBe(points.expected);
+    expect(await scroll.evaluate((node) => node.scrollTop)).toBe(before.scroll);
+  }
+  expect(await disk("notes/welcome.md")).toBe(original);
+  expect(errors).toEqual([]);
+});
+
+test("editor mouse selection keeps source selection and scroll while navigating a long document", async () => {
+  const original = "# Selection\n\n" + "Earlier paragraph.\n\n".repeat(80) +
+    "Source selection target.\n\n" + "Later paragraph.\n\n".repeat(80);
+  await fs.writeFile(file("notes/welcome.md"), original);
+  await open("notes/welcome.md");
+  await page.getByRole("button", { name: "Markdown source mode", exact: true }).click();
+  const source = page.locator(".editor-pane.active .cm-content");
+  const scroll = page.locator(".editor-pane.active .cm-scroller");
+  await expect(source).toBeFocused();
+  await scroll.evaluate((node) => { node.scrollTop = node.scrollHeight / 2 - node.clientHeight / 2; });
+  const target = source.locator(".cm-line").filter({ hasText: "Source selection target." });
+  await expect(target).toBeVisible();
+  const points = await target.evaluate((element) => {
+    const text = element.firstChild;
+    const point = (offset) => {
+      const range = document.createRange();
+      range.setStart(text, offset);
+      range.setEnd(text, offset + 1);
+      const rect = range.getBoundingClientRect();
+      return { x: rect.left, y: rect.top + rect.height / 2 };
+    };
+    return { start: point(7), end: point(16) };
+  });
+  const before = await scroll.evaluate((node) => node.scrollTop);
+  await page.mouse.move(points.start.x, points.start.y);
+  await page.mouse.down();
+  await page.mouse.move(points.end.x, points.end.y, { steps: 12 });
+  await page.mouse.up();
+  await expect.poll(() => page.evaluate(() => window.getSelection().toString())).toBe("selection");
+  expect(await scroll.evaluate((node) => node.scrollTop)).toBe(before);
+  await open("notes/other.md");
+  await page.getByRole("button", { name: "Navigate back", exact: true }).click();
+  await expect(source).toBeFocused();
+  await expect.poll(() => scroll.evaluate((node) => node.scrollTop)).toBe(before);
+  await page.keyboard.insertText("RESTORED");
+  await expect(source).toContainText("Source RESTORED target.");
+  expect(await disk("notes/welcome.md")).toBe(original);
+  expect(errors).toEqual([]);
+});
+
+for (const mode of ["visual", "source"]) {
+  test(`editor delayed restoration respects new scrolling in ${mode} mode`, async () => {
+    await fs.writeFile(file("notes/welcome.md"), "# Restore\n\n" + "A long document paragraph.\n\n".repeat(160));
+    await open("notes/welcome.md");
+    if (mode === "source")
+      await page.getByRole("button", { name: "Markdown source mode", exact: true }).click();
+    const content = page.locator(`.editor-pane.active ${mode === "visual" ? ".document-content" : ".cm-content"}`);
+    const scrollSelector = mode === "visual" ? ".document-scroll" : ".cm-scroller";
+    const scroll = page.locator(`.editor-pane.active ${scrollSelector}`);
+    await expect(content).toBeFocused();
+    await scroll.evaluate((node) => { node.scrollTop = 600; });
+    await expect.poll(() => scroll.evaluate((node) => node.scrollTop)).toBe(600);
+    await open("notes/other.md");
+    await expect(page.locator(".editor-pane.active .document-content")).toBeFocused();
+    // Hold layout frames so a real wheel gesture can overtake the final restore.
+    await page.evaluate(() => {
+      const request = window.requestAnimationFrame.bind(window);
+      const cancel = window.cancelAnimationFrame.bind(window);
+      let id = 0;
+      const frames = new Map();
+      window.requestAnimationFrame = (callback) => { frames.set(--id, callback); return id; };
+      window.cancelAnimationFrame = (frame) => { if (frame < 0) frames.delete(frame); else cancel(frame); };
+      window.flushEditorFrames = () => {
+        const pending = [...frames.values()];
+        frames.clear();
+        pending.forEach((callback) => callback(performance.now()));
+      };
+      window.releaseEditorFrames = () => {
+        window.requestAnimationFrame = request;
+        window.cancelAnimationFrame = cancel;
+        window.flushEditorFrames();
+        delete window.flushEditorFrames;
+        delete window.releaseEditorFrames;
+      };
+    });
+    try {
+      await page.locator('.editor-tab[data-tooltip="notes/welcome.md"]').dispatchEvent("click");
+      await page.evaluate(() => window.flushEditorFrames());
+      await page.evaluate(() => window.flushEditorFrames());
+      const box = await scroll.boundingBox();
+      await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+      await page.mouse.wheel(0, 240);
+      await expect.poll(() => scroll.evaluate((node) => node.scrollTop)).toBeGreaterThan(700);
+      const afterWheel = await scroll.evaluate((node) => node.scrollTop);
+      await page.evaluate(() => window.releaseEditorFrames());
+      await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+      expect(await scroll.evaluate((node) => node.scrollTop)).toBe(afterWheel);
+    } finally {
+      await page.evaluate(() => window.releaseEditorFrames?.());
+    }
+    expect(errors).toEqual([]);
+  });
+}
 
 test("QoL navigation restores selections and scroll, supports forward and branches after Back", async () => {
   const original =
@@ -5463,6 +5656,9 @@ test("Workbench lesson layout preserves dirty buffers and the running terminal, 
 test("Workbench compact chrome keeps labelled actions, toolbar keyboard access and usable targets in both themes", async () => {
   await open("notes/welcome.md");
   await app.evaluate(({BrowserWindow}) => BrowserWindow.getAllWindows()[0].setContentSize(820, 700));
+  // Deliver the native resize before opening a menu; resizing dismisses menus.
+  await expect.poll(() => page.evaluate(() => [innerWidth, innerHeight])).toEqual([820, 700]);
+  await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
   const style = page.getByLabel("Text style", {exact: true});
   await style.focus();
   await page.keyboard.press("ArrowRight");

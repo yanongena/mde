@@ -59,7 +59,12 @@ export function visualProtection(text: string): string | null {
   // Never interpret raw HTML or unsupported extensions as an editable rich document.
   const checks: [RegExp, string][] = [
     [/!?\[\[/, "wiki links"],
-    [/^\$\$|\$[^\s$][^$]*\$/m, "mathematical notation"],
+    // Inline math needs paired delimiters on one line with no inner edge
+    // whitespace, so PHP variables in prose cannot become closing delimiters.
+    [
+      /^\$\$|(?<!\\)\$(?![\s$])[^$\r\n]*?(?<!\s)\$(?!\d)/m,
+      "mathematical notation",
+    ],
     [/^:::/m, "custom Markdown directives"],
   ];
   const reason = html

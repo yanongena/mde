@@ -1,11 +1,13 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { JSDOM } from "jsdom";
 import { Schema } from "@tiptap/pm/model";
 import {
   markdownProjection,
   visualProjection,
   visualToSource,
   sourceToVisual,
+  scheduleEditorRestore,
 } from "../src/lib/editor-position.ts";
 import { visualMatches } from "../src/editors/visual-search.ts";
 import { NavigationHistory } from "../src/lib/navigation.ts";
@@ -28,6 +30,47 @@ const schema = new Schema({
 });
 const node = (name, text, attrs) =>
   schema.node(name, attrs, text ? [schema.text(text)] : []);
+
+test("deferred editor restoration yields to new selection, typing and scrolling", () => {
+  const dom = new JSDOM("<div id='editor'></div><button>Toolbar</button>");
+  const { window } = dom;
+  const surface = window.document.getElementById("editor");
+  const frames = new Map();
+  let nextFrame = 0;
+  window.requestAnimationFrame = (callback) => { frames.set(++nextFrame, callback); return nextFrame; };
+  window.cancelAnimationFrame = (id) => frames.delete(id);
+  const flush = () => {
+    const pending = [...frames.values()];
+    frames.clear();
+    pending.forEach((callback) => callback());
+  };
+  let restores = 0;
+  try {
+    scheduleEditorRestore(surface, () => restores++);
+    flush();
+    assert.equal(restores, 1, "an uninterrupted restore still runs");
+    for (const event of ["pointerdown", "keydown", "wheel", "touchmove"]) {
+      scheduleEditorRestore(surface, () => restores++);
+      surface.dispatchEvent(new window.Event(event, { bubbles: true }));
+      flush();
+      assert.equal(restores, 1, `${event} cancels stale scroll and focus`);
+    }
+    scheduleEditorRestore(surface, () => restores++);
+    window.document.querySelector("button").dispatchEvent(new window.Event("pointerdown", { bubbles: true }));
+    flush();
+    assert.equal(restores, 1, "a toolbar interaction also keeps focus");
+    const cancel = scheduleEditorRestore(surface, () => restores++);
+    cancel();
+    flush();
+    assert.equal(restores, 1, "effect cleanup cancels a pending restore");
+    scheduleEditorRestore(surface, () => restores++);
+    surface.remove();
+    flush();
+    assert.equal(restores, 1, "an unmounted editor cannot steal focus");
+  } finally {
+    window.close();
+  }
+});
 
 test("editor projections preserve exact caret positions across Markdown markers and metadata", () => {
   const text =

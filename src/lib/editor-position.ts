@@ -243,6 +243,30 @@ export function registerEditor(
 }
 export const editorHandle = (path: string, mode: string) =>
   handles.get(key(path, mode));
+
+// Restoring a view takes a frame for layout to settle. A new user action during
+// that frame takes precedence over the saved selection, scroll position or focus.
+export function scheduleEditorRestore(
+  surface: HTMLElement,
+  restore: () => void,
+) {
+  const doc = surface.ownerDocument;
+  const win = doc.defaultView!;
+  const events = ["pointerdown", "keydown", "wheel", "touchmove"] as const;
+  const cancel = () => {
+    win.cancelAnimationFrame(frame);
+    events.forEach((event) => doc.removeEventListener(event, cancel, true));
+  };
+  const frame = win.requestAnimationFrame(() => {
+    cancel();
+    if (surface.isConnected) restore();
+  });
+  events.forEach((event) =>
+    doc.addEventListener(event, cancel, { capture: true, passive: true }),
+  );
+  return cancel;
+}
+
 export function positionChanged(
   path: string,
   kind: "selection" | "scroll" = "selection",

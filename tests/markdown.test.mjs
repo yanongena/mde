@@ -70,6 +70,28 @@ test("angle-bracket destinations and autolinks are not embedded HTML", () => {
   assert.equal(visualProtection("[[wiki]]"), "wiki links");
 });
 
+test("PHP variables in prose do not trigger math protection", () => {
+  for (const text of [
+    "$bedragExcl en $percentage zijn de parameters.",
+    "Elk element van $artikels bevat id, naam en aantal.\n\nGebruik $bedragExcl.",
+    "Vul **berekenSubtotaal(array $artikels): float** in.\n\n" +
+      "Een artikel lees je met $artikel['prijs_excl'] en $artikel['aantal'].",
+    "Een bedrag van $5 of $10.",
+    String.raw`Letterlijke dollars: \$x\$.`,
+  ]) {
+    assert.equal(visualProtection(text), null, text);
+    assert.equal(documentMode("webshop.md", text), "visual", text);
+  }
+  for (const text of [
+    "$x$",
+    "$x + y$",
+    "Formule: $E = mc^2$.",
+    "$$\nx + y\n$$",
+    "$artikels en $percentage, maar ook $x + y$.",
+  ])
+    assert.equal(visualProtection(text), "mathematical notation", text);
+});
+
 test("protected Markdown supports explicit Visual without losing its Source default", () => {
   const text = "[Lesson][L1]\n\n[L1]: lesson.php";
   assert.equal(documentMode("note.md", text), "source");

@@ -56,6 +56,7 @@ import {
   registerEditor,
   editorHandle,
   positionChanged,
+  scheduleEditorRestore,
   textSignature,
   visualToSource,
   sourceToVisual,
@@ -509,7 +510,7 @@ export function MarkdownEditor({
             : sourceToVisual(raw, editor.state.doc, saved.sourceHead),
         );
         editor.commands.setTextSelection({ from, to });
-        requestAnimationFrame(() => {
+        scheduleEditorRestore(editor.view.dom, () => {
           if (editor.isDestroyed) return;
           if (exact) scroll.scrollTop = saved.scrollTop;
           else {
@@ -536,7 +537,7 @@ export function MarkdownEditor({
           .scrollIntoView()
           .run();
         editor.view.focus();
-        requestAnimationFrame(() => {
+        scheduleEditorRestore(editor.view.dom, () => {
           if (editor.isDestroyed) return;
           const point = editor.view.coordsAtPos(
             sourceToVisual(textRef.current, editor.state.doc, from),
@@ -555,7 +556,7 @@ export function MarkdownEditor({
     if (!editor || !visible || restoredPosition.current) return;
     restoredPosition.current = true;
     if (!position) return;
-    requestAnimationFrame(() =>
+    return scheduleEditorRestore(editor.view.dom, () =>
       editorHandle(path, "visual")?.restore(position, active),
     );
   }, [editor, path, active, visible, position]);
@@ -865,87 +866,89 @@ export function MarkdownEditor({
         {action("Undo", <Undo2 />, () => editor.chain().focus().undo().run())}
         {action("Redo", <Redo2 />, () => editor.chain().focus().redo().run())}
       </div>
-      {(editor.isActive("bulletList") ||
-        editor.isActive("orderedList") ||
-        editor.isActive("taskList")) && (
-        <div className="context-toolbar">
-          <span>List</span>
-          {action(
-            "Indent list item",
-            <>
-              <IndentIncrease /> Indent
-            </>,
-            () =>
-              editor
-                .chain()
-                .focus()
-                .sinkListItem(
-                  editor.isActive("taskList") ? "taskItem" : "listItem",
-                )
-                .run(),
-          )}
-          {action(
-            "Outdent list item",
-            <>
-              <IndentDecrease /> Outdent
-            </>,
-            () =>
-              editor
-                .chain()
-                .focus()
-                .liftListItem(
-                  editor.isActive("taskList") ? "taskItem" : "listItem",
-                )
-                .run(),
-          )}
-        </div>
-      )}
-      {editor.isActive("table") && (
-        <div className="context-toolbar">
-          <span>Table</span>
-          {action(
-            "Add row",
-            <>
-              <Plus /> Row
-            </>,
-            () => editor.chain().focus().addRowAfter().run(),
-          )}
-          {action(
-            "Add column",
-            <>
-              <Plus /> Column
-            </>,
-            () => editor.chain().focus().addColumnAfter().run(),
-          )}
-          {action("Delete row", <>− Row</>, () =>
-            editor.chain().focus().deleteRow().run(),
-          )}
-          {action("Delete column", <>− Column</>, () =>
-            editor.chain().focus().deleteColumn().run(),
-          )}
-          {action("Delete table", <Trash2 />, () =>
-            editor.chain().focus().deleteTable().run(),
-          )}
-        </div>
-      )}
-      {editor.isActive("codeBlock") && (
-        <div className="context-toolbar">
-          <span>Code language</span>
-          <input
-            aria-label="Code block language"
-            placeholder="e.g. python"
-            value={editor.getAttributes("codeBlock").language || ""}
-            onChange={(e) =>
-              editor
-                .chain()
-                .updateAttributes("codeBlock", {
-                  language: e.target.value || null,
-                })
-                .run()
-            }
-          />
-        </div>
-      )}
+      <div className="context-toolbars">
+        {(editor.isActive("bulletList") ||
+          editor.isActive("orderedList") ||
+          editor.isActive("taskList")) && (
+          <div className="context-toolbar">
+            <span>List</span>
+            {action(
+              "Indent list item",
+              <>
+                <IndentIncrease /> Indent
+              </>,
+              () =>
+                editor
+                  .chain()
+                  .focus()
+                  .sinkListItem(
+                    editor.isActive("taskList") ? "taskItem" : "listItem",
+                  )
+                  .run(),
+            )}
+            {action(
+              "Outdent list item",
+              <>
+                <IndentDecrease /> Outdent
+              </>,
+              () =>
+                editor
+                  .chain()
+                  .focus()
+                  .liftListItem(
+                    editor.isActive("taskList") ? "taskItem" : "listItem",
+                  )
+                  .run(),
+            )}
+          </div>
+        )}
+        {editor.isActive("table") && (
+          <div className="context-toolbar">
+            <span>Table</span>
+            {action(
+              "Add row",
+              <>
+                <Plus /> Row
+              </>,
+              () => editor.chain().focus().addRowAfter().run(),
+            )}
+            {action(
+              "Add column",
+              <>
+                <Plus /> Column
+              </>,
+              () => editor.chain().focus().addColumnAfter().run(),
+            )}
+            {action("Delete row", <>− Row</>, () =>
+              editor.chain().focus().deleteRow().run(),
+            )}
+            {action("Delete column", <>− Column</>, () =>
+              editor.chain().focus().deleteColumn().run(),
+            )}
+            {action("Delete table", <Trash2 />, () =>
+              editor.chain().focus().deleteTable().run(),
+            )}
+          </div>
+        )}
+        {editor.isActive("codeBlock") && (
+          <div className="context-toolbar">
+            <span>Code language</span>
+            <input
+              aria-label="Code block language"
+              placeholder="e.g. python"
+              value={editor.getAttributes("codeBlock").language || ""}
+              onChange={(e) =>
+                editor
+                  .chain()
+                  .updateAttributes("codeBlock", {
+                    language: e.target.value || null,
+                  })
+                  .run()
+              }
+            />
+          </div>
+        )}
+      </div>
       {linkDialog && (
         <form
           className="link-toolbar"
